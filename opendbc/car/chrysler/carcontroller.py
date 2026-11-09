@@ -1,9 +1,16 @@
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.lateral import apply_meas_steer_torque_limits
 from opendbc.car.chrysler import chryslercan
 from opendbc.car.chrysler.values import CUSW_CARS, RAM_CARS, CarControllerParams, ChryslerFlags
 from opendbc.car.interfaces import CarControllerBase
+
+# jvePilot hybrid ACC button control parameters
+ACC_BUTTON_STEP = 8          # 80 ms cycle (12.5 Hz max button tap rate)
+ACC_BUTTON_HOLD_FRAMES = 2   # 20 ms button hold followed by 60 ms release so SCCM sends 0-frames
+ACC_SPEED_DEADBAND = 0.35    # m/s (~0.78 mph) deadband to prevent integer km/h/mph rounding oscillation
+MIN_ACC_SET_SPEED = 32.0 * CV.KPH_TO_MS  # ~20 mph / 32 km/h FCA minimum selectable ACC set speed
 
 
 class CarController(CarControllerBase):
@@ -15,6 +22,7 @@ class CarController(CarControllerBase):
     self.last_lkas_falling_edge = 0
     self.lkas_control_bit_prev = False
     self.last_button_frame = 0
+    self.last_acc_button = None
 
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.params = CarControllerParams(CP)
@@ -24,19 +32,50 @@ class CarController(CarControllerBase):
 
     lkas_active = CC.latActive and self.lkas_control_bit_prev
 
-    # cruise buttons
+    # cruise buttons (cancel, standstill auto-resume, and jvePilot hybrid ACC speed control)
+    das_bus = 2 if self.CP.carFingerprint in RAM_CARS else 0
     if (self.frame - self.last_button_frame) * DT_CTRL > 0.05:
-      das_bus = 2 if self.CP.carFingerprint in RAM_CARS else 0
-
       # ACC cancellation
       if CC.cruiseControl.cancel:
         self.last_button_frame = self.frame
+        self.last_acc_button = None
         can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, cancel=True))
 
-      # ACC resume from standstill
+      # ACC resume from standstill (0 mph stop-and-go)
       elif CC.cruiseControl.resume:
         self.last_button_frame = self.frame
+        self.last_acc_button = None
         can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, resume=True))
+
+    # jvePilot hybrid ACC set-speed modulation via virtual ACC_Accel / ACC_Decel button presses
+    if (not CC.cruiseControl.cancel and not CC.cruiseControl.resume and
+        CC.enabled and CS.cruiseState.enabled and not CS.cruiseState.standstill and
+        not CS.gasPressed and len(CS.buttonEvents) == 0 and CC.actuators.speed > 0):
+      v_acc = CS.cruiseState.speed
+      v_target = max(CC.actuators.speed, MIN_ACC_SET_SPEED)
+      if CC.hudControl.setSpeed > 0:
+        v_target = min(v_target, CC.hudControl.setSpeed)
+
+      frames_since_btn = self.frame - self.last_button_frame
+      if 0 < frames_since_btn < ACC_BUTTON_HOLD_FRAMES and self.last_acc_button in ("accel", "decel"):
+        can_sends.append(chryslercan.create_cruise_buttons(
+          self.packer, CS.button_counter + 1, das_bus,
+          accel=(self.last_acc_button == "accel"),
+          decel=(self.last_acc_button == "decel"),
+        ))
+      elif frames_since_btn >= ACC_BUTTON_STEP:
+        if v_target > v_acc + ACC_SPEED_DEADBAND:
+          self.last_button_frame = self.frame
+          self.last_acc_button = "accel"
+          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, accel=True))
+        elif v_target < v_acc - ACC_SPEED_DEADBAND and v_acc > MIN_ACC_SET_SPEED + 0.1:
+          self.last_button_frame = self.frame
+          self.last_acc_button = "decel"
+          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, decel=True))
+        else:
+          self.last_acc_button = None
+    else:
+      self.last_acc_button = None
 
     # HUD alerts
     if self.frame % 25 == 0:

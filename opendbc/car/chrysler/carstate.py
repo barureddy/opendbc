@@ -22,7 +22,27 @@ class CarState(CarStateBase):
     else:
       self.shifter_values = can_define.dv["GEAR"]["PRNDL"]
 
-    self.distance_button = 0
+    self.prev_cruise_buttons = dict.fromkeys(
+      ("ACC_Accel", "ACC_Decel", "ACC_Resume", "ACC_Cancel", "ACC_Distance_Inc", "ACC_Distance_Dec"), 0
+    )
+
+  def _create_cruise_button_events(self, cp) -> list[structs.CarState.ButtonEvent]:
+    button_events = []
+    button_map = {
+      "ACC_Accel": ButtonType.accelCruise,
+      "ACC_Decel": ButtonType.decelCruise,
+      "ACC_Resume": ButtonType.resumeCruise,
+      "ACC_Cancel": ButtonType.cancel,
+      "ACC_Distance_Inc": ButtonType.gapAdjustCruise,
+      "ACC_Distance_Dec": ButtonType.gapAdjustCruise,
+    }
+    for sig, btn_type in button_map.items():
+      cur = int(cp.vl["CRUISE_BUTTONS"][sig])
+      prev = self.prev_cruise_buttons[sig]
+      if cur != prev:
+        button_events.extend(create_button_events(cur, prev, {1: btn_type}))
+      self.prev_cruise_buttons[sig] = cur
+    return button_events
 
   def update(self, can_parsers) -> structs.CarState:
     cp = can_parsers[Bus.pt]
@@ -32,9 +52,6 @@ class CarState(CarStateBase):
       return self.update_cusw(cp, cp_cam)
 
     ret = structs.CarState()
-
-    prev_distance_button = self.distance_button
-    self.distance_button = cp.vl["CRUISE_BUTTONS"]["ACC_Distance_Dec"]
 
     # lock info
     ret.doorOpen = any([cp.vl["BCM_1"]["DOOR_OPEN_FL"],
@@ -77,6 +94,7 @@ class CarState(CarStateBase):
     ret.cruiseState.available = cp_cruise.vl["DAS_3"]["ACC_AVAILABLE"] == 1
     ret.cruiseState.enabled = cp_cruise.vl["DAS_3"]["ACC_ACTIVE"] == 1
     ret.cruiseState.speed = cp_cruise.vl["DAS_4"]["ACC_SET_SPEED_KPH"] * CV.KPH_TO_MS
+    ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.nonAdaptive = cp_cruise.vl["DAS_4"]["ACC_STATE"] in (1, 2)  # 1 NormalCCOn and 2 NormalCCSet
     ret.cruiseState.standstill = cp_cruise.vl["DAS_3"]["ACC_STANDSTILL"] == 1
     ret.accFaulted = cp_cruise.vl["DAS_3"]["ACC_FAULTED"] != 0
@@ -95,9 +113,9 @@ class CarState(CarStateBase):
       ret.rightBlindspot = cp.vl["BSM_1"]["RIGHT_STATUS"] == 1
 
     self.lkas_car_model = cp_cam.vl["DAS_6"]["CAR_MODEL"]
-    self.button_counter = cp.vl["CRUISE_BUTTONS"]["COUNTER"]
+    self.button_counter = int(cp.vl["CRUISE_BUTTONS"]["COUNTER"])
 
-    ret.buttonEvents = create_button_events(self.distance_button, prev_distance_button, {1: ButtonType.gapAdjustCruise})
+    ret.buttonEvents = self._create_cruise_button_events(cp)
 
     return ret
 
@@ -132,8 +150,10 @@ class CarState(CarStateBase):
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(cp.vl["GEAR"]["PRNDL"], None))
 
     ret.cruiseState.speed = cp.vl["ACC_HUD"]["ACC_SET_SPEED_KMH"] * CV.KPH_TO_MS
+    ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.available = bool(cp.vl["ACC_CONTROL"]["ACC_MAIN_ON"])
     ret.cruiseState.enabled = bool(cp.vl["ACC_CONTROL"]["ACC_ACTIVE"])
+    ret.cruiseState.standstill = ret.standstill and ret.cruiseState.enabled
 
     ret.steeringTorque = cp.vl["EPS_STATUS"]["TORQUE_DRIVER"]
     ret.steeringTorqueEps = cp.vl["EPS_STATUS"]["TORQUE_MOTOR"]
@@ -145,6 +165,8 @@ class CarState(CarStateBase):
       ret.rightBlindspot = bool(cp.vl["BSM_RIGHT"]["RIGHT_DETECTED"])
 
     self.lkas_car_model = cp_cam.vl["DAS_6"]["CAR_MODEL"]
+    self.button_counter = int(cp.vl["CRUISE_BUTTONS"]["COUNTER"])
+    ret.buttonEvents = self._create_cruise_button_events(cp)
 
     return ret
 

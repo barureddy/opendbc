@@ -24,8 +24,15 @@ class TestChryslerCuswSafety(common.CarSafetyTest, common.MotorTorqueSteeringSaf
     self.safety.set_safety_hooks(CarParams.SafetyModel.chryslerCusw, 0)
     self.safety.init_tests()
 
-  def _button_msg(self, cancel=False, resume=False):
-    values = {"ACC_Cancel": cancel, "ACC_Resume": resume}
+  def _button_msg(self, cancel=False, resume=False, accel=False, decel=False, dist_inc=False, dist_dec=False):
+    values = {
+      "ACC_Cancel": cancel,
+      "ACC_Resume": resume,
+      "ACC_Accel": accel,
+      "ACC_Decel": decel,
+      "ACC_Distance_Inc": dist_inc,
+      "ACC_Distance_Dec": dist_dec,
+    }
     return self.packer.make_can_msg_safety("CRUISE_BUTTONS", 0, values)
 
   def _pcm_status_msg(self, enable):
@@ -58,11 +65,19 @@ class TestChryslerCuswSafety(common.CarSafetyTest, common.MotorTorqueSteeringSaf
 
       self.assertFalse(self._tx(self._button_msg()))
 
-      # resume only while controls allowed
+      # resume, accel, decel, distance only while controls allowed
       self.assertEqual(controls_allowed, self._tx(self._button_msg(resume=True)))
+      self.assertEqual(controls_allowed, self._tx(self._button_msg(accel=True)))
+      self.assertEqual(controls_allowed, self._tx(self._button_msg(decel=True)))
+      self.assertEqual(controls_allowed, self._tx(self._button_msg(dist_inc=True)))
+      self.assertEqual(controls_allowed, self._tx(self._button_msg(dist_dec=True)))
 
       # can always cancel
       self.assertTrue(self._tx(self._button_msg(cancel=True)))
+
+      # only one button at a time
+      self.assertFalse(self._tx(self._button_msg(cancel=True, resume=True)))
+      self.assertFalse(self._tx(self._button_msg(accel=True, decel=True)))
 
   def test_rx_hook(self):
     for count in range(20):

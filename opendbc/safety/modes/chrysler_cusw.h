@@ -120,11 +120,15 @@ static bool chrysler_cusw_tx_hook(const CANPacket_t *msg) {
   }
 
   if (msg->addr == 0x2FAU) {
-    // Signal: CRUISE_BUTTONS.ACC_Cancel
-    // Signal: CRUISE_BUTTONS.ACC_Resume
-    const bool is_cancel = GET_BIT(msg, 0U);
-    const bool is_resume = GET_BIT(msg, 4U);
-    const bool allowed = is_cancel || (is_resume && controls_allowed);
+    // Signal: CRUISE_BUTTONS (only one button press allowed at a time)
+    const uint16_t btn_bits = ((uint16_t)(msg->data[1] & 0x0FU) << 8) | msg->data[0];
+    const bool is_cancel = (btn_bits == 0x0001U);
+    const bool is_dist_dec = (btn_bits == 0x0002U);
+    const bool is_accel = (btn_bits == 0x0004U);
+    const bool is_decel = (btn_bits == 0x0008U);
+    const bool is_resume = (btn_bits == 0x0010U);
+    const bool is_dist_inc = (btn_bits == 0x0100U);
+    const bool allowed = is_cancel || ((is_resume || is_accel || is_decel || is_dist_inc || is_dist_dec) && controls_allowed);
     if (!allowed) {
       tx = false;
     }
