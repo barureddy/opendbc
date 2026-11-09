@@ -74,6 +74,7 @@ class CarState(CarStateBase):
       ret.vEgoRaw = (cp.vl["SPEED_1"]["SPEED_LEFT"] + cp.vl["SPEED_1"]["SPEED_RIGHT"]) / 2.
       ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(cp.vl["GEAR"]["PRNDL"], None))
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
+    ret.vEgoCluster = cp.vl["ESP_8"]["Vehicle_Speed"] * CV.KPH_TO_MS
     ret.standstill = not ret.vEgoRaw > 0.001
 
     # button presses
@@ -135,6 +136,7 @@ class CarState(CarStateBase):
 
     ret.vEgoRaw = cp.vl["BRAKE_1"]["VEHICLE_SPEED"]
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
+    ret.vEgoCluster = cp.vl["CLUSTER_1"]["SPEEDOMETER"]
     ret.standstill = not ret.vEgoRaw > 0.001
     self.parse_wheel_speeds(ret,
       cp.vl["WHEEL_SPEEDS_FRONT"]["WHEEL_SPEED_FL"],

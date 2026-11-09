@@ -23,6 +23,7 @@ class CarController(CarControllerBase):
     self.lkas_control_bit_prev = False
     self.last_button_frame = 0
     self.last_acc_button = None
+    self.auto_follow_bars = 0
 
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.params = CarControllerParams(CP)
@@ -57,13 +58,19 @@ class CarController(CarControllerBase):
         v_target = min(v_target, CC.hudControl.setSpeed)
 
       frames_since_btn = self.frame - self.last_button_frame
-      if 0 < frames_since_btn < ACC_BUTTON_HOLD_FRAMES and self.last_acc_button in ("accel", "decel"):
+      if 0 < frames_since_btn < ACC_BUTTON_HOLD_FRAMES and self.last_acc_button in ("accel", "decel", "dist_inc", "dist_dec"):
         can_sends.append(chryslercan.create_cruise_buttons(
           self.packer, CS.button_counter + 1, das_bus,
           accel=(self.last_acc_button == "accel"),
           decel=(self.last_acc_button == "decel"),
+          distance_inc=(self.last_acc_button == "dist_inc"),
+          distance_dec=(self.last_acc_button == "dist_dec"),
         ))
       elif frames_since_btn >= ACC_BUTTON_STEP:
+        target_bars = int(getattr(CC.hudControl, "leadDistanceBars", 0))
+        if target_bars in (1, 2, 3, 4) and self.auto_follow_bars == 0:
+          self.auto_follow_bars = target_bars
+
         if v_target > v_acc + ACC_SPEED_DEADBAND:
           self.last_button_frame = self.frame
           self.last_acc_button = "accel"
@@ -72,10 +79,22 @@ class CarController(CarControllerBase):
           self.last_button_frame = self.frame
           self.last_acc_button = "decel"
           can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, decel=True))
+        elif target_bars in (1, 2, 3, 4) and target_bars > self.auto_follow_bars:
+          self.last_button_frame = self.frame
+          self.last_acc_button = "dist_inc"
+          self.auto_follow_bars += 1
+          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, distance_inc=True))
+        elif target_bars in (1, 2, 3, 4) and target_bars < self.auto_follow_bars:
+          self.last_button_frame = self.frame
+          self.last_acc_button = "dist_dec"
+          self.auto_follow_bars -= 1
+          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, distance_dec=True))
         else:
           self.last_acc_button = None
     else:
       self.last_acc_button = None
+      if not CC.enabled or not CS.cruiseState.enabled:
+        self.auto_follow_bars = 0
 
     # HUD alerts
     if self.frame % 25 == 0:
