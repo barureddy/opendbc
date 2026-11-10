@@ -25,6 +25,8 @@ class CarState(CarStateBase):
     self.prev_cruise_buttons = dict.fromkeys(
       ("ACC_Accel", "ACC_Decel", "ACC_Resume", "ACC_Cancel", "ACC_Distance_Inc", "ACC_Distance_Dec"), 0
     )
+    self.cruise_button_pressed = False
+    self.acc_follow_bars = 0
 
   def _create_cruise_button_events(self, cp) -> list[structs.CarState.ButtonEvent]:
     button_events = []
@@ -42,6 +44,7 @@ class CarState(CarStateBase):
       if cur != prev:
         button_events.extend(create_button_events(cur, prev, {1: btn_type}))
       self.prev_cruise_buttons[sig] = cur
+    self.cruise_button_pressed = any(self.prev_cruise_buttons.values())
     return button_events
 
   def update(self, can_parsers) -> structs.CarState:
@@ -99,6 +102,7 @@ class CarState(CarStateBase):
     ret.cruiseState.nonAdaptive = cp_cruise.vl["DAS_4"]["ACC_STATE"] in (1, 2)  # 1 NormalCCOn and 2 NormalCCSet
     ret.cruiseState.standstill = cp_cruise.vl["DAS_3"]["ACC_STANDSTILL"] == 1
     ret.accFaulted = cp_cruise.vl["DAS_3"]["ACC_FAULTED"] != 0
+    self.acc_follow_bars = int(cp_cruise.vl["DAS_4"]["ACC_DISTANCE_CONFIG_2"]) + 1
 
     if self.CP.carFingerprint in RAM_CARS:
       # Auto High Beam isn't Located in this message on chrysler or jeep currently located in 729 message
@@ -156,6 +160,7 @@ class CarState(CarStateBase):
     ret.cruiseState.available = bool(cp.vl["ACC_CONTROL"]["ACC_MAIN_ON"])
     ret.cruiseState.enabled = bool(cp.vl["ACC_CONTROL"]["ACC_ACTIVE"])
     ret.cruiseState.standstill = ret.standstill and ret.cruiseState.enabled
+    self.acc_follow_bars = int(cp.vl["ACC_HUD"]["DISTANCE_SETTING"]) + 1
 
     ret.steeringTorque = cp.vl["EPS_STATUS"]["TORQUE_DRIVER"]
     ret.steeringTorqueEps = cp.vl["EPS_STATUS"]["TORQUE_MOTOR"]

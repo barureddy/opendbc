@@ -7,8 +7,7 @@ from opendbc.car.chrysler.values import CUSW_CARS, RAM_CARS, CarControllerParams
 from opendbc.car.interfaces import CarControllerBase
 
 # jvePilot hybrid ACC button control parameters
-ACC_BUTTON_STEP = 8          # 80 ms cycle (12.5 Hz max button tap rate)
-ACC_BUTTON_HOLD_FRAMES = 2   # 20 ms button hold followed by 60 ms release so SCCM sends 0-frames
+ACC_BUTTON_STEP = 8          # 80 ms cycle (12.5 Hz max button tap rate; single pulse per cycle avoids duplicate 50 Hz SCCM counters)
 ACC_SPEED_DEADBAND = 0.35    # m/s (~0.78 mph) deadband to prevent integer km/h/mph rounding oscillation
 MIN_ACC_SET_SPEED = 32.0 * CV.KPH_TO_MS  # ~20 mph / 32 km/h FCA minimum selectable ACC set speed
 
@@ -30,6 +29,8 @@ class CarController(CarControllerBase):
 
   def update(self, CC, CS, now_nanos):
     can_sends = []
+    cs_out = CS.out if hasattr(CS, "out") else CS
+    driver_button_active = getattr(CS, "cruise_button_pressed", False) or len(cs_out.buttonEvents) > 0
 
     lkas_active = CC.latActive and self.lkas_control_bit_prev
 
@@ -42,33 +43,29 @@ class CarController(CarControllerBase):
         self.last_acc_button = None
         can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, cancel=True))
 
-      # ACC resume from standstill (0 mph stop-and-go)
-      elif CC.cruiseControl.resume:
+      # ACC resume from standstill (0 mph stop-and-go), guarded against pedal/fault/button conflicts
+      elif (CC.cruiseControl.resume and not cs_out.brakePressed and not cs_out.gasPressed and
+            not cs_out.accFaulted and not driver_button_active):
         self.last_button_frame = self.frame
         self.last_acc_button = None
         can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, resume=True))
 
-    # jvePilot hybrid ACC set-speed modulation via virtual ACC_Accel / ACC_Decel button presses
+    # jvePilot hybrid ACC set-speed and follow-distance modulation via virtual cruise button pulses
     if (not CC.cruiseControl.cancel and not CC.cruiseControl.resume and
-        CC.enabled and CS.cruiseState.enabled and not CS.cruiseState.standstill and
-        not CS.gasPressed and len(CS.buttonEvents) == 0 and CC.actuators.speed > 0):
-      v_acc = CS.cruiseState.speed
+        CC.enabled and cs_out.cruiseState.enabled and not cs_out.cruiseState.standstill and
+        not cs_out.gasPressed and not cs_out.brakePressed and not cs_out.accFaulted and
+        not driver_button_active and CC.actuators.speed > 0):
+      v_acc = cs_out.cruiseState.speed
       v_target = max(CC.actuators.speed, MIN_ACC_SET_SPEED)
       if CC.hudControl.setSpeed > 0:
         v_target = min(v_target, CC.hudControl.setSpeed)
 
-      frames_since_btn = self.frame - self.last_button_frame
-      if 0 < frames_since_btn < ACC_BUTTON_HOLD_FRAMES and self.last_acc_button in ("accel", "decel", "dist_inc", "dist_dec"):
-        can_sends.append(chryslercan.create_cruise_buttons(
-          self.packer, CS.button_counter + 1, das_bus,
-          accel=(self.last_acc_button == "accel"),
-          decel=(self.last_acc_button == "decel"),
-          distance_inc=(self.last_acc_button == "dist_inc"),
-          distance_dec=(self.last_acc_button == "dist_dec"),
-        ))
-      elif frames_since_btn >= ACC_BUTTON_STEP:
+      if (self.frame - self.last_button_frame) >= ACC_BUTTON_STEP:
         target_bars = int(getattr(CC.hudControl, "leadDistanceBars", 0))
-        if target_bars in (1, 2, 3, 4) and self.auto_follow_bars == 0:
+        can_bars = int(getattr(CS, "acc_follow_bars", 0))
+        if can_bars in (1, 2, 3, 4):
+          self.auto_follow_bars = can_bars
+        elif target_bars in (1, 2, 3, 4) and self.auto_follow_bars == 0:
           self.auto_follow_bars = target_bars
 
         if v_target > v_acc + ACC_SPEED_DEADBAND:
@@ -93,7 +90,7 @@ class CarController(CarControllerBase):
           self.last_acc_button = None
     else:
       self.last_acc_button = None
-      if not CC.enabled or not CS.cruiseState.enabled:
+      if not CC.enabled or not cs_out.cruiseState.enabled:
         self.auto_follow_bars = 0
 
     # HUD alerts
