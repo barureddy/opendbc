@@ -11,8 +11,16 @@ from opendbc.car.interfaces import CarControllerBase
 ACC_BUTTON_STEP = 8           # at least 80 ms between virtual presses (single frame per press, like upstream cancel/resume)
 ACC_FEEDBACK_TIMEOUT = 50     # 500 ms for a press to show up in the stock ACC set speed / distance before it counts as unconfirmed
 ACC_MAX_UNCONFIRMED = 3       # consecutive unconfirmed presses before that button type is disabled until the next engagement
-ACC_SPEED_DEADBAND = 0.35     # m/s (~0.78 mph) deadband to prevent integer km/h/mph rounding oscillation
+# Set-speed change per press. Starts at 1 mph and is learned from CAN feedback (1 km/h on metric cars; 1 mph shows up
+# as 1-2 km/h on the integer km/h ACC_HUD signal). Pressing only when the error exceeds half a step plus a margin
+# moves to the closest reachable set speed and can never oscillate.
+DEFAULT_SET_SPEED_STEP = CV.MPH_TO_MS
+SET_SPEED_MARGIN = 0.05  # m/s
 MIN_ACC_SET_SPEED = 32.0 * CV.KPH_TO_MS  # ~20 mph / 32 km/h FCA minimum selectable ACC set speed
+# An unanswered press near these set speeds is treated as the car's real min/max ACC set speed (learned per
+# engagement) instead of a fault, since the exact CUSW limits are not verified yet
+LEARN_FLOOR_BELOW = 50.0 * CV.KPH_TO_MS
+LEARN_CEILING_ABOVE = 120.0 * CV.KPH_TO_MS
 
 
 class CarController(CarControllerBase):
@@ -24,6 +32,7 @@ class CarController(CarControllerBase):
     self.last_lkas_falling_edge = 0
     self.lkas_control_bit_prev = False
     self.last_button_frame = 0
+    self.jve_set_speed_step = None  # learned stock ACC set-speed change per press (m/s), kept across engagements
     self._jve_reset()
 
     self.packer = CANPacker(dbc_names[Bus.pt])
@@ -34,6 +43,8 @@ class CarController(CarControllerBase):
     self.jve_pending = None
     self.jve_unconfirmed = {"speed": 0, "dist": 0}
     self.jve_inhibited = {"speed": False, "dist": False}
+    self.jve_speed_floor = None    # learned stock ACC min set speed (m/s) for this engagement
+    self.jve_speed_ceiling = None  # learned stock ACC max set speed (m/s) for this engagement
 
   def _jve_inhibit(self, kind, reason):
     if not self.jve_inhibited[kind]:
@@ -61,10 +72,17 @@ class CarController(CarControllerBase):
       self.jve_pending = None
       if delta * direction > 0:
         self.jve_unconfirmed[kind] = 0
+        if kind == "speed":
+          self.jve_set_speed_step = max(self.jve_set_speed_step or 0.0, abs(delta))
       else:
         self._jve_inhibit(kind, f"stock ACC moved opposite to the press (delta={delta})")
     elif self.frame - frame >= ACC_FEEDBACK_TIMEOUT:
       self.jve_pending = None
+      if kind == "speed":
+        if direction < 0 and ref < LEARN_FLOOR_BELOW:
+          self.jve_speed_floor = ref
+        elif direction > 0 and ref > LEARN_CEILING_ABOVE:
+          self.jve_speed_ceiling = ref
       self.jve_unconfirmed[kind] += 1
       if self.jve_unconfirmed[kind] >= ACC_MAX_UNCONFIRMED:
         self._jve_inhibit(kind, f"{ACC_MAX_UNCONFIRMED} presses with no stock ACC response")
@@ -77,9 +95,12 @@ class CarController(CarControllerBase):
       v_target = min(v_target, CC.hudControl.setSpeed)
 
     if not self.jve_inhibited["speed"]:
-      if v_target > v_acc + ACC_SPEED_DEADBAND:
+      at_ceiling = self.jve_speed_ceiling is not None and v_acc >= self.jve_speed_ceiling - 0.1
+      at_floor = v_acc <= MIN_ACC_SET_SPEED + 0.1 or (self.jve_speed_floor is not None and v_acc <= self.jve_speed_floor + 0.1)
+      threshold = (self.jve_set_speed_step or DEFAULT_SET_SPEED_STEP) / 2 + SET_SPEED_MARGIN
+      if v_target > v_acc + threshold and not at_ceiling:
         return "speed", 1, {"accel": True}
-      if v_target < v_acc - ACC_SPEED_DEADBAND and v_acc > MIN_ACC_SET_SPEED + 0.1:
+      if v_target < v_acc - threshold and not at_floor:
         return "speed", -1, {"decel": True}
 
     # Auto Follow: only act on a known stock ACC bar setting reported on CAN
