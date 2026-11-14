@@ -1,5 +1,6 @@
 from opendbc.can import CANPacker
 from opendbc.car import Bus, DT_CTRL
+from opendbc.car.carlog import carlog
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.lateral import apply_meas_steer_torque_limits
 from opendbc.car.chrysler import chryslercan
@@ -7,8 +8,10 @@ from opendbc.car.chrysler.values import CUSW_CARS, RAM_CARS, CarControllerParams
 from opendbc.car.interfaces import CarControllerBase
 
 # jvePilot hybrid ACC button control parameters
-ACC_BUTTON_STEP = 8          # 80 ms cycle (12.5 Hz max button tap rate; single pulse per cycle avoids duplicate 50 Hz SCCM counters)
-ACC_SPEED_DEADBAND = 0.35    # m/s (~0.78 mph) deadband to prevent integer km/h/mph rounding oscillation
+ACC_BUTTON_STEP = 8           # at least 80 ms between virtual presses (single frame per press, like upstream cancel/resume)
+ACC_FEEDBACK_TIMEOUT = 50     # 500 ms for a press to show up in the stock ACC set speed / distance before it counts as unconfirmed
+ACC_MAX_UNCONFIRMED = 3       # consecutive unconfirmed presses before that button type is disabled until the next engagement
+ACC_SPEED_DEADBAND = 0.35     # m/s (~0.78 mph) deadband to prevent integer km/h/mph rounding oscillation
 MIN_ACC_SET_SPEED = 32.0 * CV.KPH_TO_MS  # ~20 mph / 32 km/h FCA minimum selectable ACC set speed
 
 
@@ -21,11 +24,73 @@ class CarController(CarControllerBase):
     self.last_lkas_falling_edge = 0
     self.lkas_control_bit_prev = False
     self.last_button_frame = 0
-    self.last_acc_button = None
-    self.auto_follow_bars = 0
+    self._jve_reset()
 
     self.packer = CANPacker(dbc_names[Bus.pt])
     self.params = CarControllerParams(CP)
+
+  def _jve_reset(self):
+    # pending press awaiting CAN feedback: (kind "speed"|"dist", value at press, direction +1/-1, frame)
+    self.jve_pending = None
+    self.jve_unconfirmed = {"speed": 0, "dist": 0}
+    self.jve_inhibited = {"speed": False, "dist": False}
+
+  def _jve_inhibit(self, kind, reason):
+    if not self.jve_inhibited[kind]:
+      carlog.warning(f"jvePilot: disabling {kind} button control until next engagement ({reason})")
+    self.jve_inhibited[kind] = True
+
+  def _jve_check_feedback(self, cs_out, CS, driver_button_active):
+    """Confirm the last virtual press moved stock ACC the expected way; fail closed if it didn't."""
+    if self.jve_pending is None:
+      return
+    kind, ref, direction, frame = self.jve_pending
+    if driver_button_active:
+      # driver is using the buttons, so any change can't be attributed to our press
+      self.jve_pending = None
+      return
+
+    if kind == "speed":
+      delta = cs_out.cruiseState.speed - ref
+      changed = abs(delta) > 0.1
+    else:
+      delta = int(getattr(CS, "acc_follow_bars", 0)) - ref
+      changed = delta != 0
+
+    if changed:
+      self.jve_pending = None
+      if delta * direction > 0:
+        self.jve_unconfirmed[kind] = 0
+      else:
+        self._jve_inhibit(kind, f"stock ACC moved opposite to the press (delta={delta})")
+    elif self.frame - frame >= ACC_FEEDBACK_TIMEOUT:
+      self.jve_pending = None
+      self.jve_unconfirmed[kind] += 1
+      if self.jve_unconfirmed[kind] >= ACC_MAX_UNCONFIRMED:
+        self._jve_inhibit(kind, f"{ACC_MAX_UNCONFIRMED} presses with no stock ACC response")
+
+  def _jve_select_button(self, CC, cs_out, CS):
+    """Returns (kind, direction, button_kwargs) for the next virtual press, or None."""
+    v_acc = cs_out.cruiseState.speed
+    v_target = max(CC.actuators.speed, MIN_ACC_SET_SPEED)
+    if CC.hudControl.setSpeed > 0:
+      v_target = min(v_target, CC.hudControl.setSpeed)
+
+    if not self.jve_inhibited["speed"]:
+      if v_target > v_acc + ACC_SPEED_DEADBAND:
+        return "speed", 1, {"accel": True}
+      if v_target < v_acc - ACC_SPEED_DEADBAND and v_acc > MIN_ACC_SET_SPEED + 0.1:
+        return "speed", -1, {"decel": True}
+
+    # Auto Follow: only act on a known stock ACC bar setting reported on CAN
+    target_bars = int(getattr(CC.hudControl, "leadDistanceBars", 0))
+    can_bars = int(getattr(CS, "acc_follow_bars", 0))
+    if (not self.jve_inhibited["dist"] and target_bars in (1, 2, 3, 4) and can_bars in (1, 2, 3, 4) and
+        target_bars != can_bars):
+      if target_bars > can_bars:
+        return "dist", 1, {"distance_inc": True}
+      return "dist", -1, {"distance_dec": True}
+    return None
 
   def update(self, CC, CS, now_nanos):
     can_sends = []
@@ -40,58 +105,31 @@ class CarController(CarControllerBase):
       # ACC cancellation
       if CC.cruiseControl.cancel:
         self.last_button_frame = self.frame
-        self.last_acc_button = None
         can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, cancel=True))
 
-      # ACC resume from standstill (0 mph stop-and-go), guarded against pedal/fault/button conflicts
+      # ACC resume from standstill (0 mph stop-and-go), guarded against pedal/fault/button conflicts and stale CAN
       elif (CC.cruiseControl.resume and not cs_out.brakePressed and not cs_out.gasPressed and
-            not cs_out.accFaulted and not driver_button_active):
+            not cs_out.accFaulted and cs_out.canValid and not driver_button_active):
         self.last_button_frame = self.frame
-        self.last_acc_button = None
         can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, resume=True))
 
     # jvePilot hybrid ACC set-speed and follow-distance modulation via virtual cruise button pulses
-    if (not CC.cruiseControl.cancel and not CC.cruiseControl.resume and
-        CC.enabled and cs_out.cruiseState.enabled and not cs_out.cruiseState.standstill and
-        not cs_out.gasPressed and not cs_out.brakePressed and not cs_out.accFaulted and
-        not driver_button_active and CC.actuators.speed > 0):
-      v_acc = cs_out.cruiseState.speed
-      v_target = max(CC.actuators.speed, MIN_ACC_SET_SPEED)
-      if CC.hudControl.setSpeed > 0:
-        v_target = min(v_target, CC.hudControl.setSpeed)
-
-      if (self.frame - self.last_button_frame) >= ACC_BUTTON_STEP:
-        target_bars = int(getattr(CC.hudControl, "leadDistanceBars", 0))
-        can_bars = int(getattr(CS, "acc_follow_bars", 0))
-        if can_bars in (1, 2, 3, 4):
-          self.auto_follow_bars = can_bars
-        elif target_bars in (1, 2, 3, 4) and self.auto_follow_bars == 0:
-          self.auto_follow_bars = target_bars
-
-        if v_target > v_acc + ACC_SPEED_DEADBAND:
+    if not CC.enabled or not cs_out.cruiseState.enabled:
+      self._jve_reset()
+    elif CC.actuators.speed > 0:
+      self._jve_check_feedback(cs_out, CS, driver_button_active)
+      can_press = (not CC.cruiseControl.cancel and not CC.cruiseControl.resume and
+                   not cs_out.cruiseState.standstill and not cs_out.gasPressed and not cs_out.brakePressed and
+                   not cs_out.accFaulted and cs_out.canValid and not driver_button_active and
+                   self.jve_pending is None and (self.frame - self.last_button_frame) >= ACC_BUTTON_STEP)
+      if can_press:
+        selection = self._jve_select_button(CC, cs_out, CS)
+        if selection is not None:
+          kind, direction, button = selection
+          ref = cs_out.cruiseState.speed if kind == "speed" else int(getattr(CS, "acc_follow_bars", 0))
+          self.jve_pending = (kind, ref, direction, self.frame)
           self.last_button_frame = self.frame
-          self.last_acc_button = "accel"
-          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, accel=True))
-        elif v_target < v_acc - ACC_SPEED_DEADBAND and v_acc > MIN_ACC_SET_SPEED + 0.1:
-          self.last_button_frame = self.frame
-          self.last_acc_button = "decel"
-          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, decel=True))
-        elif target_bars in (1, 2, 3, 4) and target_bars > self.auto_follow_bars:
-          self.last_button_frame = self.frame
-          self.last_acc_button = "dist_inc"
-          self.auto_follow_bars += 1
-          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, distance_inc=True))
-        elif target_bars in (1, 2, 3, 4) and target_bars < self.auto_follow_bars:
-          self.last_button_frame = self.frame
-          self.last_acc_button = "dist_dec"
-          self.auto_follow_bars -= 1
-          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, distance_dec=True))
-        else:
-          self.last_acc_button = None
-    else:
-      self.last_acc_button = None
-      if not CC.enabled or not cs_out.cruiseState.enabled:
-        self.auto_follow_bars = 0
+          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, **button))
 
     # HUD alerts
     if self.frame % 25 == 0:

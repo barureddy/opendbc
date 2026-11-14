@@ -77,7 +77,7 @@ class CarState(CarStateBase):
       ret.vEgoRaw = (cp.vl["SPEED_1"]["SPEED_LEFT"] + cp.vl["SPEED_1"]["SPEED_RIGHT"]) / 2.
       ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(cp.vl["GEAR"]["PRNDL"], None))
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
-    ret.vEgoCluster = cp.vl["ESP_8"]["Vehicle_Speed"] * CV.KPH_TO_MS
+    # TODO: find the dash speedometer signal for Pacifica/Grand Cherokee/Durango (vEgoCluster falls back to vEgo)
     ret.standstill = not ret.vEgoRaw > 0.001
 
     # button presses
@@ -160,6 +160,9 @@ class CarState(CarStateBase):
     ret.cruiseState.available = bool(cp.vl["ACC_CONTROL"]["ACC_MAIN_ON"])
     ret.cruiseState.enabled = bool(cp.vl["ACC_CONTROL"]["ACC_ACTIVE"])
     ret.cruiseState.standstill = ret.standstill and ret.cruiseState.enabled
+    # TODO: CUSW ACC fault signal not identified yet, so accFaulted stays False here (needs a route log with an ACC fault)
+    # ASSUMPTION (unverified on CUSW): DISTANCE_SETTING 0..3 maps to 1..4 bars. CarController stops Auto Follow if
+    # distance presses don't move this value as expected.
     self.acc_follow_bars = int(cp.vl["ACC_HUD"]["DISTANCE_SETTING"]) + 1
 
     ret.steeringTorque = cp.vl["EPS_STATUS"]["TORQUE_DRIVER"]
