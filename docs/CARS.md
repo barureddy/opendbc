@@ -179,7 +179,7 @@
 |Hyundai|Tucson Hybrid 2022-24|All|[Upstream](#upstream)|
 |Hyundai|Tucson Plug-in Hybrid 2024|All|[Upstream](#upstream)|
 |Hyundai|Veloster 2019-20|Smart Cruise Control (SCC)|[Upstream](#upstream)|
-|Jeep|Cherokee 2019-23|Adaptive Cruise Control (ACC)|[Dashcam mode](#dashcam)|
+|Jeep|Cherokee 2014-23|Adaptive Cruise Control (ACC)|[Dashcam mode](#dashcam)|
 |Jeep|Grand Cherokee 2016-18|Adaptive Cruise Control (ACC)|[Upstream](#upstream)|
 |Jeep|Grand Cherokee 2019-21|Adaptive Cruise Control (ACC)|[Upstream](#upstream)|
 |Kia|Carnival 2022-24|Smart Cruise Control (SCC)|[Upstream](#upstream)|

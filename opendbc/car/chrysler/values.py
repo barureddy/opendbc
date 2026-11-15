@@ -69,7 +69,7 @@ class CAR(Platforms):
 
   # Jeep
   JEEP_CHEROKEE_5TH_GEN = ChryslerPlatformConfig(
-    [ChryslerCarDocs("Jeep Cherokee 2019-23")],
+    [ChryslerCarDocs("Jeep Cherokee 2014-23")],
     ChryslerCarSpecs(mass=1747., wheelbase=2.70, steerRatio=17.0, minSteerSpeed=18.5),
     {Bus.pt: 'chrysler_cusw'},
   )
