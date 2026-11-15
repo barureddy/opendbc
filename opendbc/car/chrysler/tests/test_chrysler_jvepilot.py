@@ -7,8 +7,9 @@ import pytest
 from opendbc.can import CANPacker
 from opendbc.car import Bus, gen_empty_fingerprint, structs
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.chrysler.carcontroller import (ACC_BUTTON_STEP, ACC_FEEDBACK_TIMEOUT, ACC_MAX_UNCONFIRMED,
-                                                CarController)
+from opendbc.car.chrysler.carcontroller import (ACC_BUTTON_HOLD_FRAMES, ACC_BUTTON_STEP, ACC_FEEDBACK_TIMEOUT,
+                                                ACC_MAX_UNCONFIRMED, CarController)
+from opendbc.car.chrysler import chryslercan
 from opendbc.car.chrysler.carstate import CarState
 from opendbc.car.chrysler.interface import CarInterface
 from opendbc.car.chrysler.values import CAR, DBC, ChryslerFlags
@@ -75,26 +76,26 @@ class TestJvePilotCarController:
 
   def test_decel_waits_for_feedback_then_confirms(self):
     CC, CS = make_cc(target_kph=72.0), make_cs(set_speed_kph=113.0)
-    first = self._step(CC, CS, ACC_BUTTON_STEP + 1)
-    assert len(first) == 1 and first[0][1][0] & 0x08  # ACC_Decel
+    first = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(first) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in first)  # ACC_Decel held
 
     # no stock ACC response yet: must not press again before the feedback timeout
-    assert self._step(CC, CS, ACC_FEEDBACK_TIMEOUT - 5) == []
+    assert self._step(CC, CS, ACC_FEEDBACK_TIMEOUT - 10) == []
 
     # stock ACC lowers its set speed -> press confirmed, next press follows after ACC_BUTTON_STEP
     CS.out.cruiseState.speed = 112.0 * CV.KPH_TO_MS
-    nxt = self._step(CC, CS, ACC_BUTTON_STEP + 1)
-    assert len(nxt) == 1 and nxt[0][1][0] & 0x08
+    nxt = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(nxt) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in nxt)
     assert self.cc.jve_unconfirmed["speed"] == 0
 
   def test_accel_press(self):
-    sent = self._step(make_cc(target_kph=113.0), make_cs(set_speed_kph=72.0), ACC_BUTTON_STEP + 1)
-    assert len(sent) == 1 and sent[0][1][0] & 0x04  # ACC_Accel
+    sent = self._step(make_cc(target_kph=113.0), make_cs(set_speed_kph=72.0), ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(sent) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x04 for _, f in sent)  # ACC_Accel
 
   def test_unconfirmed_presses_inhibit_speed_control(self):
     CC, CS = make_cc(target_kph=72.0), make_cs(set_speed_kph=113.0)
     sent = self._step(CC, CS, (ACC_FEEDBACK_TIMEOUT + 1) * (ACC_MAX_UNCONFIRMED + 2))
-    assert len(sent) == ACC_MAX_UNCONFIRMED
+    assert len(sent) == ACC_MAX_UNCONFIRMED * ACC_BUTTON_HOLD_FRAMES
     assert self.cc.jve_inhibited["speed"]
     # re-engagement clears the inhibit
     self._step(make_cc(enabled=False), CS, 1)
@@ -102,32 +103,32 @@ class TestJvePilotCarController:
 
   def test_opposite_response_inhibits(self):
     CC, CS = make_cc(target_kph=72.0), make_cs(set_speed_kph=113.0)
-    self._step(CC, CS, ACC_BUTTON_STEP + 1)
+    self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
     CS.out.cruiseState.speed = 114.0 * CV.KPH_TO_MS  # went up after a decel press
     self._step(CC, CS, 1)
     assert self.cc.jve_inhibited["speed"]
 
   def test_auto_follow_uses_can_feedback(self):
     CC, CS = make_cc(target_kph=113.0, bars=3), make_cs(set_speed_kph=113.0, bars=1)
-    sent = self._step(CC, CS, ACC_BUTTON_STEP + 1)
-    assert len(sent) == 1 and sent[0][1][1] & 0x01  # ACC_Distance_Inc (byte 1 bit 0)
+    sent = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(sent) == ACC_BUTTON_HOLD_FRAMES and all(f[1] & 0x01 for _, f in sent)  # ACC_Distance_Inc (byte 1 bit 0)
     CS.acc_follow_bars = 2
-    sent = self._step(CC, CS, ACC_BUTTON_STEP + 1)
-    assert len(sent) == 1 and sent[0][1][1] & 0x01
+    sent = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(sent) == ACC_BUTTON_HOLD_FRAMES and all(f[1] & 0x01 for _, f in sent)
     CS.acc_follow_bars = 3
     assert self._step(CC, CS, 100) == []  # target reached
 
   def test_auto_follow_wrong_direction_inhibits_distance_only(self):
     CC, CS = make_cc(target_kph=113.0, bars=3), make_cs(set_speed_kph=113.0, bars=2)
-    self._step(CC, CS, ACC_BUTTON_STEP + 1)
+    self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
     CS.acc_follow_bars = 1  # Distance_Inc reduced bars: mapping assumption wrong -> stop Auto Follow
     self._step(CC, CS, 1)
     assert self.cc.jve_inhibited["dist"] and not self.cc.jve_inhibited["speed"]
     assert self._step(CC, CS, 100) == []
     # speed control still works
     CC.actuators.speed = 72.0 * CV.KPH_TO_MS
-    sent = self._step(CC, CS, ACC_BUTTON_STEP + 1)
-    assert len(sent) == 1 and sent[0][1][0] & 0x08
+    sent = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(sent) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in sent)
 
   def test_auto_follow_requires_known_can_bars(self):
     assert self._step(make_cc(target_kph=113.0, bars=3), make_cs(set_speed_kph=113.0, bars=0), 100) == []
@@ -151,6 +152,15 @@ class TestJvePilotCarController:
     # target below FCA minimum while at minimum: no decel
     assert self._step(make_cc(target_kph=10.0), make_cs(set_speed_kph=32.0), 100) == []
 
+  def test_single_missed_decel_at_43mph_does_not_latch_false_floor(self):
+    CC, CS = make_cc(target_kph=50.0, set_speed_kph=72.0), make_cs(set_speed_kph=69.0)  # 43 mph
+    first = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(first) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in first)
+    # Time out the first press at 69 km/h (43 mph): must NOT latch jve_speed_floor on a single missed press, and must retry
+    nxt = self._step(CC, CS, ACC_FEEDBACK_TIMEOUT + 1)
+    assert self.cc.jve_speed_floor is None
+    assert len(nxt) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in nxt)
+
   def test_resume_guarded_by_brake(self):
     CC, CS = make_cc(target_kph=0.0), make_cs(set_speed_kph=50.0)
     CC.cruiseControl.resume = True
@@ -167,6 +177,51 @@ class TestJvePilotCarController:
     CS.cruise_button_pressed = True
     sent = self._step(CC, CS, 10)
     assert len(sent) > 0 and all(d[0] == 0x01 for _, d in sent)
+
+  def test_driver_button_post_release_cooldown(self):
+    CC, CS = make_cc(target_kph=72.0), make_cs(set_speed_kph=113.0)
+    CS.cruise_button_pressed = True
+    assert self._step(CC, CS, 30) == []
+    CS.cruise_button_pressed = False
+    # must wait ACC_BUTTON_STEP frames after driver releases button before sending virtual press
+    assert self._step(CC, CS, ACC_BUTTON_STEP - 1) == []
+    sent = self._step(CC, CS, ACC_BUTTON_HOLD_FRAMES)
+    assert len(sent) == ACC_BUTTON_HOLD_FRAMES
+
+  def test_cusw_disengage_ramp_down_on_cruise_disable_before_lat_active_drops(self):
+    CC, CS = make_cc(target_kph=0.0), make_cs(set_speed_kph=113.0)
+    CC.latActive = True
+    CC.actuators.torque = 0.5
+    # pass the 200-frame initial LKAS cooldown and build up torque
+    for _ in range(250):
+      self.safety.set_torque_meas(self.cc.apply_torque_last, self.cc.apply_torque_last)
+      CS.out.steeringTorqueEps = float(self.cc.apply_torque_last)
+      _, sends = self.cc.update(CC.as_reader(), CS, 0)
+      for addr, dat, bus in sends:
+        if addr == 0x1F6:
+          assert self.safety.safety_tx_hook(libsafety_py.make_CANPacket(addr, bus, dat))
+    assert self.cc.apply_torque_last > 100
+
+    # ACC_ACTIVE drops on CAN (so Panda safety immediately clears controls_allowed), while controlsd still has CC.latActive=True for 1 frame
+    CS.out.cruiseState.enabled = False
+    self.safety.set_controls_allowed(False)
+    while self.cc.apply_torque_last > 0:
+      _, sends = self.cc.update(CC.as_reader(), CS, 0)
+      for addr, dat, bus in sends:
+        if addr == 0x1F6:
+          assert self.safety.safety_tx_hook(libsafety_py.make_CANPacket(addr, bus, dat)), "Panda rejected ramp-down frame"
+      CC.latActive = False
+
+  def test_cusw_das6_hud_matches_stock_camera(self):
+    packer = CANPacker(DBC[CUSW][Bus.pt])
+    _, dat_standby, _ = chryslercan.create_lkas_hud(packer, self.CP, False, structs.CarControl.HUDControl.VisualAlert.none, 10, 0x68, 0)
+    _, dat_active, _ = chryslercan.create_lkas_hud(packer, self.CP, True, structs.CarControl.HUDControl.VisualAlert.none, 10, 0x68, 0)
+    _, dat_alert, _ = chryslercan.create_lkas_hud(packer, self.CP, True, structs.CarControl.HUDControl.VisualAlert.steerRequired, 10, 0x68, 0)
+    _, dat_off, _ = chryslercan.create_lkas_hud(packer, self.CP, False, structs.CarControl.HUDControl.VisualAlert.none, 10, 0x00, 0)
+    assert bytes(dat_standby) == bytes.fromhex("01680100")
+    assert bytes(dat_active) == bytes.fromhex("02680600")
+    assert bytes(dat_alert) == bytes.fromhex("04680400")
+    assert bytes(dat_off) == bytes.fromhex("00000000")
 
 
 class TestJvePilotCarStateCusw:
@@ -194,3 +249,10 @@ class TestJvePilotCarStateCusw:
     assert out.cruiseState.enabled and abs(out.cruiseState.speed - 113 * CV.KPH_TO_MS) < 1e-3
     assert out.leftBlindspot and not out.rightBlindspot
     assert len(out.buttonEvents) == 1 and out.buttonEvents[0].type == structs.CarState.ButtonEvent.Type.accelCruise
+
+    # verify CUSW lowSpeedAlert hysteresis (18.5 m/s up, 16.5 m/s down)
+    for speed, expected_alert in [(17.5, True), (19.0, False), (17.5, False), (16.0, True), (17.5, True), (19.0, False)]:
+      for _ in range(50):
+        parsers[Bus.pt].update([(10_000_000, [packer.make_can_msg("BRAKE_1", 0, {"VEHICLE_SPEED": speed})])])
+        out = cs.update(parsers)
+      assert out.lowSpeedAlert == expected_alert, f"speed={speed} lowSpeedAlert={out.lowSpeedAlert}"

@@ -186,21 +186,22 @@ class TestChryslerCuswSafety(common.CarSafetyTest, common.MotorTorqueSteeringSaf
     self.safety.set_chrysler_cusw_torque_last(self.MAX_RATE_DOWN)
     self.assertTrue(self._tx(self._torque_cmd_msg(0, steer_req=1)))
 
-  def test_ramp_down_violation_resets(self):
-    """After a ramp-down violation, must send zero torque"""
+  def test_ramp_down_violation_preserves_ramp_state(self):
+    """A rejected non-ramping frame (e.g. 1-frame pipeline race on disengage) is blocked without
+    killing the subsequent ramp-down toward zero."""
     self.safety.set_controls_allowed(True)
     self._set_prev_torque(50)
     self.assertTrue(self._tx(self._torque_cmd_msg(50)))
 
     self.safety.set_controls_allowed(False)
 
-    # Cause a violation (wrong direction)
+    # A stale normal-operation frame (wrong direction / no ramp) is blocked
     self.assertFalse(self._tx(self._torque_cmd_msg(51)))
+    self.assertFalse(self._tx(self._torque_cmd_msg(50)))
 
-    # After violation, chrysler_cusw_torque_last is reset to 0,
-    # so now only zero torque with steer_req=0 is allowed
-    self.assertFalse(self._tx(self._torque_cmd_msg(46, steer_req=1)))
-    self.assertTrue(self._tx(self._torque_cmd_msg(0, steer_req=0)))
+    # Subsequent valid ramp-down steps from 50 toward 0 still succeed
+    self.assertTrue(self._tx(self._torque_cmd_msg(46, steer_req=1)))
+    self.assertTrue(self._tx(self._torque_cmd_msg(42, steer_req=1)))
 
 
 if __name__ == "__main__":

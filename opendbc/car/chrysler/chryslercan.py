@@ -28,23 +28,35 @@ def create_lkas_hud(packer, CP, lkas_active, hud_alert, hud_count, car_model, au
   # 7 Normal
   # 6 lane departure place hands on wheel
 
-  color = 2 if lkas_active else 1
-  lines = 3 if lkas_active else 0
-  alerts = 7 if lkas_active else 0
+  if CP.carFingerprint in CUSW_CARS:
+    if car_model == 0:
+      color = 0
+      lines = 0
+    elif hud_alert in (VisualAlert.ldw, VisualAlert.steerRequired):
+      color = 4
+      lines = 4
+    else:
+      color = 2 if lkas_active else 1
+      lines = 6 if lkas_active else 1
+    alerts = 0
+  else:
+    color = 2 if lkas_active else 1
+    lines = 3 if lkas_active else 0
+    alerts = 7 if lkas_active else 0
 
-  if hud_count < (1 * 4):  # first 3 seconds, 4Hz
-    alerts = 1
+    if hud_count < (1 * 4):  # first 3 seconds, 4Hz
+      alerts = 1
 
-  if hud_alert in (VisualAlert.ldw, VisualAlert.steerRequired):
-    color = 4
-    lines = 0
-    alerts = 6
+    if hud_alert in (VisualAlert.ldw, VisualAlert.steerRequired):
+      color = 4
+      lines = 0
+      alerts = 6
 
   values = {
     "LKAS_ICON_COLOR": color,
     "CAR_MODEL": car_model,
     "LKAS_LANE_LINES": lines,
-    "LKAS_ALERTS": alerts if CP.carFingerprint not in CUSW_CARS else 0,  # TODO: HUD behavior not yet understood for CUSW
+    "LKAS_ALERTS": alerts,
   }
 
   if CP.carFingerprint in RAM_CARS:

@@ -16,6 +16,7 @@ class CarState(CarStateBase):
     self.auto_high_beam = 0
     self.button_counter = 0
     self.lkas_car_model = -1
+    self.low_speed_alert = True
 
     if CP.carFingerprint in RAM_CARS:
       self.shifter_values = can_define.dv["Transmission_Status"]["Gear_State"]
@@ -142,6 +143,11 @@ class CarState(CarStateBase):
     ret.vEgo, ret.aEgo = self.update_speed_kf(ret.vEgoRaw)
     ret.vEgoCluster = cp.vl["CLUSTER_1"]["SPEEDOMETER"]
     ret.standstill = not ret.vEgoRaw > 0.001
+    if ret.vEgo > self.CP.minSteerSpeed:
+      self.low_speed_alert = False
+    elif ret.vEgo < (self.CP.minSteerSpeed - 2.0):
+      self.low_speed_alert = True
+    ret.lowSpeedAlert = self.low_speed_alert
     self.parse_wheel_speeds(ret,
       cp.vl["WHEEL_SPEEDS_FRONT"]["WHEEL_SPEED_FL"],
       cp.vl["WHEEL_SPEEDS_REAR"]["WHEEL_SPEED_RR"],

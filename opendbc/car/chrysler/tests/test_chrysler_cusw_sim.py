@@ -12,7 +12,7 @@ import pytest
 from opendbc.can import CANPacker
 from opendbc.car import gen_empty_fingerprint, structs
 from opendbc.car.common.conversions import Conversions as CV
-from opendbc.car.chrysler.carcontroller import ACC_MAX_UNCONFIRMED
+from opendbc.car.chrysler.carcontroller import ACC_BUTTON_HOLD_FRAMES, ACC_MAX_UNCONFIRMED
 from opendbc.car.chrysler.interface import CarInterface
 from opendbc.car.chrysler.values import CAR
 from opendbc.safety.tests.libsafety import libsafety_py
@@ -25,7 +25,7 @@ BUTTON_BITS = {"ACC_Cancel": 0, "ACC_Distance_Dec": 1, "ACC_Accel": 2, "ACC_Dece
 class CuswStockAcc:
   """Simulated CUSW car + stock ACC module."""
   def __init__(self, set_kph=113.0, imperial=True, hud_hz=5, hud_latency_frames=10, min_set_kph=32.0, max_set_kph=145.0,
-               distance_setting=1, buttons_work=True, v_ego=31.0):
+               distance_setting=1, buttons_work=True, v_ego=31.0, drop_odd_frames=False):
     self.packer = CANPacker("chrysler_cusw")
     self.frame = 0
     self.v_ego = v_ego
@@ -34,6 +34,7 @@ class CuswStockAcc:
     self.min_set_kph, self.max_set_kph = min_set_kph, max_set_kph
     self.distance_setting = distance_setting  # 0..3
     self.buttons_work = buttons_work
+    self.drop_odd_frames = drop_odd_frames
     self.acc_active = True
     self.hud_period = int(100 / hud_hz)
     self.hud_latency = hud_latency_frames
@@ -42,26 +43,38 @@ class CuswStockAcc:
     self.sccm_counter = 0
     self.last_counter = None
     self.driver_buttons: dict[str, int] = {}
+    self.mailbox_button: str | None = None
+    self.mailbox_from_openpilot = False
+    self.held_button: str | None = None
     self.accepted_presses: list[str] = []
 
-  def _process_buttons(self, values: dict[str, int], counter: int, from_openpilot: bool):
+  def _accept_frame(self, values: dict[str, int], counter: int, from_openpilot: bool):
     if counter == self.last_counter:
       return  # duplicate rolling counter: dropped by the receiving module
     self.last_counter = counter
     pressed = [name for name, v in values.items() if v]
-    if not pressed or not self.buttons_work:
+    self.mailbox_button = pressed[0] if pressed else None
+    self.mailbox_from_openpilot = from_openpilot and bool(pressed)
+
+  def _sample_mailbox(self):
+    btn = self.mailbox_button
+    if btn == self.held_button:
       return
-    if from_openpilot:
-      self.accepted_presses.append(pressed[0])
-    if "ACC_Cancel" in pressed:
+    prev = self.held_button
+    self.held_button = btn
+    if btn is None or prev is not None or not self.buttons_work:
+      return
+    if self.mailbox_from_openpilot:
+      self.accepted_presses.append(btn)
+    if btn == "ACC_Cancel":
       self.acc_active = False
-    elif "ACC_Accel" in pressed:
+    elif btn == "ACC_Accel":
       self.set_kph = min(self.set_kph + self.step_kph, self.max_set_kph)
-    elif "ACC_Decel" in pressed:
+    elif btn == "ACC_Decel":
       self.set_kph = max(self.set_kph - self.step_kph, self.min_set_kph)
-    elif "ACC_Distance_Inc" in pressed:
+    elif btn == "ACC_Distance_Inc":
       self.distance_setting = min(self.distance_setting + 1, 3)
-    elif "ACC_Distance_Dec" in pressed:
+    elif btn == "ACC_Distance_Dec":
       self.distance_setting = max(self.distance_setting - 1, 0)
 
   def can_frames(self):
@@ -88,7 +101,7 @@ class CuswStockAcc:
     if f % 2 == 0:
       self.sccm_counter = (self.sccm_counter + 1) % 16
       values = {name: self.driver_buttons.get(name, 0) for name in BUTTON_BITS}
-      self._process_buttons(values, self.sccm_counter, from_openpilot=False)
+      self._accept_frame(values, self.sccm_counter, from_openpilot=False)
       msgs.append(p.make_can_msg("CRUISE_BUTTONS", 0, {**values, "COUNTER": self.sccm_counter}))
 
     # stock ACC reports set speed / distance on ACC_HUD at hud_hz, hud_latency frames behind its internal state
@@ -103,8 +116,11 @@ class CuswStockAcc:
   def receive_from_openpilot(self, sends):
     for addr, dat, bus in sends:
       if addr == CRUISE_BUTTONS and bus == 0:
+        if self.drop_odd_frames and self.frame % 2 == 1:
+          continue
         values = {name: (dat[bit // 8] >> (bit % 8)) & 1 for name, bit in BUTTON_BITS.items()}
-        self._process_buttons(values, dat[1] >> 4, from_openpilot=True)
+        self._accept_frame(values, dat[1] >> 4, from_openpilot=True)
+    self._sample_mailbox()
 
 
 class Harness:
@@ -156,7 +172,7 @@ def test_cusw_set_speed_tracks_target_without_overshoot(imperial, hud_hz, latenc
   steps_down = len(sim.accepted_presses)
   assert steps_down <= (113.0 - 72.0) / sim.step_kph + 1, f"extra presses: {steps_down}"
   assert all(p == "ACC_Decel" for p in sim.accepted_presses)
-  assert h.sent == steps_down, "every press sent should have been accepted by the ACC module (counter handling)"
+  assert h.sent == steps_down * ACC_BUTTON_HOLD_FRAMES, "every held press should have been accepted once by the ACC module"
 
   # back up to the driver max after the curve
   sim.accepted_presses.clear()
@@ -167,26 +183,37 @@ def test_cusw_set_speed_tracks_target_without_overshoot(imperial, hud_hz, latenc
   assert not h.CI.CC.jve_inhibited["speed"]
 
 
-def test_cusw_learns_real_min_set_speed_without_disabling():
-  # car's real minimum is 40 km/h (higher than the 32 km/h assumed): one unanswered press at the floor, no fault
-  sim = CuswStockAcc(set_kph=50.0, min_set_kph=40.0, imperial=False)
+def test_cusw_adverse_sccm_phase_still_tracks_target():
+  # Even when odd-frame transmissions are overwritten by the 50 Hz SCCM before the ACC module samples, the 4-frame hold still succeeds
+  sim = CuswStockAcc(set_kph=113.0, imperial=True, hud_hz=5, hud_latency_frames=10, drop_odd_frames=True)
   h = Harness(sim)
-  h.run(3000, target_kph=20.0, driver_max_kph=50.0)
-  assert sim.set_kph == 40.0
+  h.run(3000, target_kph=72.0)
+  assert abs(sim.set_kph - 72.0) <= sim.step_kph / 2 + 0.5, sim.set_kph
+  assert not h.CI.CC.jve_inhibited["speed"]
+
+
+@pytest.mark.parametrize("min_set_kph,start_kph", [(40.0, 50.0), (69.0, 74.0)])
+def test_cusw_learns_real_min_set_speed_without_disabling(min_set_kph, start_kph):
+  # car's real minimum is higher than the 32 km/h assumed (e.g. 69 km/h on 2019 Jeep Cherokee): one unanswered press at the floor, no fault
+  sim = CuswStockAcc(set_kph=start_kph, min_set_kph=min_set_kph, imperial=False)
+  h = Harness(sim)
+  h.run(3000, target_kph=20.0, driver_max_kph=start_kph)
+  assert sim.set_kph == min_set_kph
   assert h.CI.CC.jve_speed_floor is not None
+  assert h.CI.CC.jve_unconfirmed["speed"] == 0
   assert not h.CI.CC.jve_inhibited["speed"]
   sent_at_floor = h.sent
-  h.run(1000, target_kph=20.0, driver_max_kph=50.0)
+  h.run(1000, target_kph=20.0, driver_max_kph=start_kph)
   assert h.sent == sent_at_floor, "kept pressing decel at the floor"
-  h.run(2000, target_kph=50.0, driver_max_kph=50.0)
-  assert sim.set_kph == 50.0  # speed control still works upward
+  h.run(2000, target_kph=start_kph, driver_max_kph=start_kph)
+  assert sim.set_kph == start_kph  # speed control still works upward
 
 
 def test_cusw_presses_ignored_fail_closed():
   sim = CuswStockAcc(set_kph=113.0, buttons_work=False)
   h = Harness(sim)
   h.run(3000, target_kph=72.0)
-  assert h.sent == ACC_MAX_UNCONFIRMED
+  assert h.sent == ACC_MAX_UNCONFIRMED * ACC_BUTTON_HOLD_FRAMES
   assert h.CI.CC.jve_inhibited["speed"]
   assert sim.set_kph == 113.0
 
@@ -197,7 +224,7 @@ def test_cusw_auto_follow_reaches_target_bars():
   h.run(2000, target_kph=113.0, bars=4)
   assert sim.distance_setting == 3
   assert h.CI.CS.acc_follow_bars == 4
-  assert h.sent == 3
+  assert h.sent == 3 * ACC_BUTTON_HOLD_FRAMES
 
 
 def test_cusw_driver_buttons_take_priority():
