@@ -161,7 +161,11 @@ class CarState(CarStateBase):
     ret.steeringAngleDeg = cp.vl["STEERING"]["STEER_ANGLE"]
     ret.gearShifter = self.parse_gear_shifter(self.shifter_values.get(cp.vl["GEAR"]["PRNDL"], None))
 
-    ret.cruiseState.speed = cp.vl["ACC_HUD"]["ACC_SET_SPEED_KMH"] * CV.KPH_TO_MS
+    acc_set_speed_mph = cp.vl["ACC_HUD"]["ACC_SET_SPEED_MPH"]
+    if acc_set_speed_mph > 0:
+      ret.cruiseState.speed = acc_set_speed_mph * CV.MPH_TO_MS
+    else:
+      ret.cruiseState.speed = cp.vl["ACC_HUD"]["ACC_SET_SPEED_KMH"] * CV.KPH_TO_MS
     ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.available = bool(cp.vl["ACC_CONTROL"]["ACC_MAIN_ON"])
     ret.cruiseState.enabled = bool(cp.vl["ACC_CONTROL"]["ACC_ACTIVE"])

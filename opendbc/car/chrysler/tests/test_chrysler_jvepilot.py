@@ -160,6 +160,30 @@ class TestJvePilotCarController:
     nxt = self._step(CC, CS, ACC_FEEDBACK_TIMEOUT + 1)
     assert self.cc.jve_speed_floor is None
     assert len(nxt) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in nxt)
+    # Second unconfirmed decel press at 69 km/h (43 mph) learns the hardware floor without inhibiting speed control
+    self._step(CC, CS, ACC_FEEDBACK_TIMEOUT + 1)
+    assert self.cc.jve_speed_floor == pytest.approx(69.0 * CV.KPH_TO_MS)
+    assert not self.cc.jve_inhibited["speed"]
+    # When target rises back to 72 km/h, SET+ is sent immediately to restore dashboard set speed
+    CC.actuators.speed = 72.0 * CV.KPH_TO_MS
+    up = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(up) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x04 for _, f in up)
+
+  def test_acc_hud_mph_signal_preferred_when_present(self):
+    CP = cusw_cp()
+    cs = CarState(CP)
+    parsers = cs.get_can_parsers(CP)
+    cs.update(parsers)
+    packer = CANPacker(DBC[CUSW][Bus.pt])
+    # Real SEG5 frame: ACC_SET_SPEED_MPH=55, ACC_SET_SPEED_KMH=89 (89 km/h = 55.30 mph)
+    msgs = [
+      packer.make_can_msg("ACC_CONTROL", 0, {"ACC_MAIN_ON": 1, "ACC_ACTIVE": 1}),
+      packer.make_can_msg("ACC_HUD", 0, {"ACC_SET_SPEED_KMH": 89, "ACC_SET_SPEED_MPH": 55, "DISTANCE_SETTING": 0}),
+    ]
+    parsers[Bus.pt].update([(10_000_000, msgs)])
+    out = cs.update(parsers)
+    assert out.cruiseState.speed == pytest.approx(55.0 * CV.MPH_TO_MS)
+    assert out.cruiseState.speedCluster == pytest.approx(55.0 * CV.MPH_TO_MS)
 
   def test_resume_guarded_by_brake(self):
     CC, CS = make_cc(target_kph=0.0), make_cs(set_speed_kph=50.0)
