@@ -29,6 +29,8 @@ class CarState(CarStateBase):
     )
     self.cruise_button_pressed = False
     self.acc_follow_bars = 0
+    self.acc_lead_detected = False
+    self.acc_lead_distance = 0.0
 
   def _create_cruise_button_events(self, cp) -> list[structs.CarState.ButtonEvent]:
     button_events = []
@@ -177,6 +179,9 @@ class CarState(CarStateBase):
     # ASSUMPTION (unverified on CUSW): DISTANCE_SETTING 0..3 maps to 1..4 bars. CarController stops Auto Follow if
     # distance presses don't move this value as expected.
     self.acc_follow_bars = int(cp.vl["ACC_HUD"]["DISTANCE_SETTING"]) + 1
+    lead_dist = float(cp.vl["ACC_HUD"]["DISTANCE_TO_LEAD"])
+    self.acc_lead_detected = bool(cp.vl["ACC_HUD"]["LEAD_DETECTED"]) and 0.0 < lead_dist < 250.0
+    self.acc_lead_distance = lead_dist if self.acc_lead_detected else 0.0
 
     ret.steeringTorque = cp.vl["EPS_STATUS"]["TORQUE_DRIVER"]
     ret.steeringTorqueEps = cp.vl["EPS_STATUS"]["TORQUE_MOTOR"]

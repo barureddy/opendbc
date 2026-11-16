@@ -199,6 +199,14 @@ class TestJvePilotCarController:
     # target below FCA minimum while at minimum: no decel
     assert self._step(make_cc(target_kph=10.0), make_cs(set_speed_kph=32.0), 100) == []
 
+  def test_radar_lead_distance_caps_target_speed(self):
+    CC, CS = make_cc(target_kph=113.0, set_speed_kph=113.0), make_cs(set_speed_kph=113.0, bars=2)
+    CS.acc_lead_detected = True
+    CS.acc_lead_distance = 18.0
+    sent = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(sent) == ACC_BUTTON_HOLD_FRAMES
+    assert all((d[0] & 0x08) and not (d[0] & 0x04) for _, d in sent)
+
   def test_single_missed_decel_at_43mph_does_not_latch_false_floor(self):
     CC, CS = make_cc(target_kph=50.0, set_speed_kph=72.0), make_cs(set_speed_kph=69.0)  # 43 mph
     first = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
@@ -306,7 +314,7 @@ class TestJvePilotCarStateCusw:
     msgs = [
       packer.make_can_msg("CLUSTER_1", 0, {"SPEEDOMETER": 31.5}),
       packer.make_can_msg("ACC_CONTROL", 0, {"ACC_MAIN_ON": 1, "ACC_ACTIVE": 1}),
-      packer.make_can_msg("ACC_HUD", 0, {"ACC_SET_SPEED_KMH": 113, "DISTANCE_SETTING": 2}),
+      packer.make_can_msg("ACC_HUD", 0, {"ACC_SET_SPEED_KMH": 113, "DISTANCE_SETTING": 2, "LEAD_DETECTED": 1, "DISTANCE_TO_LEAD": 25}),
       packer.make_can_msg("CRUISE_BUTTONS", 0, {"ACC_Accel": 1, "COUNTER": 7}),
       packer.make_can_msg("BSM_LEFT", 0, {"LEFT_DETECTED": 1}),
       packer.make_can_msg("BSM_RIGHT", 0, {"RIGHT_DETECTED": 0}),
@@ -316,6 +324,8 @@ class TestJvePilotCarStateCusw:
     assert cs.button_counter == 7
     assert cs.cruise_buttons_rx
     assert cs.acc_follow_bars == 3
+    assert cs.acc_lead_detected
+    assert cs.acc_lead_distance == 25.0
     assert cs.cruise_button_pressed
     assert not out.accFaulted
     assert abs(out.vEgoCluster - 31.5) < 0.05
@@ -337,3 +347,33 @@ class TestJvePilotCarStateCusw:
         parsers[Bus.pt].update([(10_000_000, [packer.make_can_msg("BRAKE_1", 0, {"VEHICLE_SPEED": speed})])])
         out = cs.update(parsers)
       assert out.lowSpeedAlert == expected_alert, f"speed={speed} lowSpeedAlert={out.lowSpeedAlert}"
+
+  def test_cusw_dbc_new_messages(self):
+    from opendbc.can import CANParser
+    packer = CANPacker(DBC[CUSW][Bus.pt])
+    parser = CANParser(DBC[CUSW][Bus.pt], [
+      ("EPS_STATUS_2", 100),
+      ("ENGINE_1", 100),
+      ("ECM_TORQUE", 100),
+      ("ECM_2", 100),
+      ("ACC_2", 100),
+      ("WHEEL_PULSES", 50),
+    ], 0)
+    msgs = [
+      packer.make_can_msg("EPS_STATUS_2", 0, {"LONG_ACCEL": 0.5, "LATERAL_ACCEL": -0.3, "YAW_RATE": 0.1}),
+      packer.make_can_msg("ENGINE_1", 0, {"ENGINE_RPM": 1800, "ACTUAL_ENGINE_TORQUE": 120}),
+      packer.make_can_msg("ECM_TORQUE", 0, {"REQUESTED_ENGINE_TORQUE": 150, "EXPECTED_ENGINE_TORQUE": 148}),
+      packer.make_can_msg("ECM_2", 0, {"PEDAL_DEMAND": 24.0, "ENGINE_DRAG_TORQUE": -20}),
+      packer.make_can_msg("ACC_2", 0, {"ACC_STATUS_1": 1, "ACC_DECEL_CMD": 8000}),
+      packer.make_can_msg("WHEEL_PULSES", 0, {"WHEEL_PULSE_FL": 42, "WHEEL_PULSE_FR": 43, "WHEEL_PULSE_RL": 44, "WHEEL_PULSE_RR": 45}),
+    ]
+    parser.update([(10_000_000, msgs)])
+    assert abs(parser.vl["EPS_STATUS_2"]["LONG_ACCEL"] - 0.5) < 0.02
+    assert abs(parser.vl["EPS_STATUS_2"]["LATERAL_ACCEL"] - (-0.3)) < 0.02
+    assert abs(parser.vl["EPS_STATUS_2"]["YAW_RATE"] - 0.1) < 0.01
+    assert parser.vl["ENGINE_1"]["ENGINE_RPM"] == 1800
+    assert parser.vl["ENGINE_1"]["ACTUAL_ENGINE_TORQUE"] == 120
+    assert parser.vl["ECM_TORQUE"]["REQUESTED_ENGINE_TORQUE"] == 150
+    assert parser.vl["ECM_TORQUE"]["EXPECTED_ENGINE_TORQUE"] == 148
+    assert parser.vl["WHEEL_PULSES"]["WHEEL_PULSE_FL"] == 42
+    assert parser.vl["WHEEL_PULSES"]["WHEEL_PULSE_RR"] == 45

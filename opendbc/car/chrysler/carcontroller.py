@@ -113,6 +113,10 @@ class CarController(CarControllerBase):
     v_target = max(CC.actuators.speed, MIN_ACC_SET_SPEED)
     if CC.hudControl.setSpeed > 0:
       v_target = min(v_target, CC.hudControl.setSpeed)
+    if getattr(CS, "acc_lead_detected", False) and getattr(CS, "acc_lead_distance", 0.0) > 0.0:
+      time_gap = 0.6 + 0.4 * min(max(int(getattr(CS, "acc_follow_bars", 2)), 1), 4)
+      v_radar_cap = max(MIN_ACC_SET_SPEED, (float(CS.acc_lead_distance) - 4.0) / time_gap)
+      v_target = min(v_target, v_radar_cap)
     self.jve_last_v_target = v_target
 
     at_ceiling = self.jve_speed_ceiling is not None and v_acc >= self.jve_speed_ceiling - 0.1
