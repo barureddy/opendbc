@@ -8,8 +8,8 @@ from opendbc.car.chrysler.values import CUSW_CARS, RAM_CARS, CarControllerParams
 from opendbc.car.interfaces import CarControllerBase
 
 # jvePilot hybrid ACC button control parameters
-ACC_BUTTON_HOLD_FRAMES = 8    # 80 ms hold per virtual press (spans four 20 ms / 50 Hz SCCM frames and one 60 ms ACC_HUD period)
-ACC_BUTTON_STEP = 15          # 150 ms start-to-start (odd frame count prevents phase-locking with the 2-frame 50 Hz SCCM period)
+ACC_BUTTON_HOLD_FRAMES = 5    # 5 SCCM-synced Tick-A pulses (~100 ms across 5 distinct 50 Hz SCCM counters)
+ACC_BUTTON_STEP = 15          # 150 ms release cooldown after the last pulse before starting the next virtual press
 ACC_FEEDBACK_TIMEOUT = 51     # 510 ms (odd) for a press to show up in the stock ACC set speed / distance before it counts as unconfirmed
 ACC_MAX_UNCONFIRMED = 3       # consecutive unconfirmed presses before that button type is disabled until the next engagement
 # Set-speed change per press. Starts at 1 mph and is learned from CAN feedback (1 km/h on metric cars; 1 mph shows up
@@ -48,6 +48,8 @@ class CarController(CarControllerBase):
     self.jve_unconfirmed = {"speed": 0, "dist": 0}
     self.jve_inhibited = {"speed": False, "dist": False}
     self.jve_inhibited_dir = {"speed": 0, "dist": 0}
+    self.jve_inhibited_target = None
+    self.jve_last_v_target = None
     self.jve_speed_floor = None    # learned stock ACC min set speed (m/s) for this engagement
     self.jve_speed_ceiling = None  # learned stock ACC max set speed (m/s) for this engagement
 
@@ -56,6 +58,8 @@ class CarController(CarControllerBase):
       carlog.warning(f"jvePilot: disabling {kind} button control until next engagement ({reason})")
     self.jve_inhibited[kind] = True
     self.jve_inhibited_dir[kind] = direction
+    if kind == "speed" and direction != 0:
+      self.jve_inhibited_target = self.jve_last_v_target
 
   def _jve_check_feedback(self, cs_out, CS, driver_button_active):
     """Confirm the last virtual press moved stock ACC the expected way; fail closed if it didn't."""
@@ -78,13 +82,13 @@ class CarController(CarControllerBase):
 
     if changed:
       self.jve_pending = None
-      self.jve_hold_button = None
-      self.jve_hold_frames = 0
       if delta * direction > 0:
         self.jve_unconfirmed[kind] = 0
         if kind == "speed":
           self.jve_set_speed_step = min(max(self.jve_set_speed_step or 0.0, abs(delta)), 2.0 * CV.KPH_TO_MS)
       else:
+        self.jve_hold_button = None
+        self.jve_hold_frames = 0
         self._jve_inhibit(kind, f"stock ACC moved opposite to the press (delta={delta})", direction=0)
     elif self.frame - frame >= ACC_FEEDBACK_TIMEOUT:
       self.jve_pending = None
@@ -109,6 +113,7 @@ class CarController(CarControllerBase):
     v_target = max(CC.actuators.speed, MIN_ACC_SET_SPEED)
     if CC.hudControl.setSpeed > 0:
       v_target = min(v_target, CC.hudControl.setSpeed)
+    self.jve_last_v_target = v_target
 
     at_ceiling = self.jve_speed_ceiling is not None and v_acc >= self.jve_speed_ceiling - 0.1
     at_floor = v_acc <= MIN_ACC_SET_SPEED + 0.1 or (self.jve_speed_floor is not None and v_acc <= self.jve_speed_floor + 0.1)
@@ -118,23 +123,28 @@ class CarController(CarControllerBase):
       speed_dir = 1
     elif v_target < v_acc - threshold and not at_floor:
       speed_dir = -1
-    if speed_dir != 0 and self.jve_inhibited["speed"] and self.jve_inhibited_dir["speed"] == -speed_dir:
+    if self.jve_inhibited["speed"] and self.jve_inhibited_dir["speed"] != 0 and (
+        speed_dir == 0 or
+        speed_dir == -self.jve_inhibited_dir["speed"] or
+        (self.jve_inhibited_target is not None and abs(v_target - self.jve_inhibited_target) >= 2.0 * DEFAULT_SET_SPEED_STEP)):
       self.jve_inhibited["speed"] = False
       self.jve_inhibited_dir["speed"] = 0
       self.jve_unconfirmed["speed"] = 0
+      self.jve_inhibited_target = None
     if not self.jve_inhibited["speed"] and speed_dir != 0:
       return "speed", speed_dir, ({"accel": True} if speed_dir > 0 else {"decel": True})
 
     # Auto Follow: only act on a known stock ACC bar setting reported on CAN
     target_bars = int(getattr(CC.hudControl, "leadDistanceBars", 0))
     can_bars = int(getattr(CS, "acc_follow_bars", 0))
-    if target_bars in (1, 2, 3, 4) and can_bars in (1, 2, 3, 4) and target_bars != can_bars:
-      dist_dir = 1 if target_bars > can_bars else -1
-      if self.jve_inhibited["dist"] and self.jve_inhibited_dir["dist"] == -dist_dir:
+    if target_bars in (1, 2, 3, 4) and can_bars in (1, 2, 3, 4):
+      dist_dir = 0 if target_bars == can_bars else (1 if target_bars > can_bars else -1)
+      if self.jve_inhibited["dist"] and self.jve_inhibited_dir["dist"] != 0 and (
+          dist_dir == 0 or dist_dir == -self.jve_inhibited_dir["dist"]):
         self.jve_inhibited["dist"] = False
         self.jve_inhibited_dir["dist"] = 0
         self.jve_unconfirmed["dist"] = 0
-      if not self.jve_inhibited["dist"]:
+      if not self.jve_inhibited["dist"] and dist_dir != 0:
         return "dist", dist_dir, ({"distance_inc": True} if dist_dir > 0 else {"distance_dec": True})
     return None
 
@@ -142,6 +152,7 @@ class CarController(CarControllerBase):
     can_sends = []
     cs_out = CS.out if hasattr(CS, "out") else CS
     driver_button_active = getattr(CS, "cruise_button_pressed", False) or len(cs_out.buttonEvents) > 0
+    cruise_buttons_rx = getattr(CS, "cruise_buttons_rx", True)
 
     lkas_active = CC.latActive and self.lkas_control_bit_prev and cs_out.cruiseState.enabled and not cs_out.brakePressed
 
@@ -153,8 +164,8 @@ class CarController(CarControllerBase):
         self.last_button_frame = self.frame
         can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, cancel=True))
 
-      # ACC resume from standstill (0 mph stop-and-go), guarded against pedal/fault/button conflicts and stale CAN
-      elif (CC.cruiseControl.resume and not cs_out.brakePressed and not cs_out.gasPressed and
+      # ACC resume from standstill (0 mph stop-and-go), guarded against pedal/fault/button conflicts, stale CAN, and Tick-B collisions
+      elif (cruise_buttons_rx and CC.cruiseControl.resume and not cs_out.brakePressed and not cs_out.gasPressed and
             not cs_out.accFaulted and cs_out.canValid and not driver_button_active):
         self.last_button_frame = self.frame
         can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, resume=True))
@@ -174,9 +185,11 @@ class CarController(CarControllerBase):
         self.jve_hold_button = None
         self.jve_hold_frames = 0
       elif self.jve_hold_frames > 0 and self.jve_hold_button is not None:
-        self.jve_hold_frames -= 1
-        can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, **self.jve_hold_button))
-      elif self.jve_pending is None and (self.frame - self.last_button_frame) >= ACC_BUTTON_STEP:
+        if cruise_buttons_rx:
+          self.jve_hold_frames -= 1
+          self.last_button_frame = self.frame
+          can_sends.append(chryslercan.create_cruise_buttons(self.packer, CS.button_counter + 1, das_bus, **self.jve_hold_button))
+      elif cruise_buttons_rx and self.jve_pending is None and (self.frame - self.last_button_frame) >= ACC_BUTTON_STEP:
         selection = self._jve_select_button(CC, cs_out, CS)
         if selection is not None:
           kind, direction, button = selection

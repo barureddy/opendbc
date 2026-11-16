@@ -101,6 +101,53 @@ class TestJvePilotCarController:
     self._step(make_cc(enabled=False), CS, 1)
     assert not self.cc.jve_inhibited["speed"]
 
+  def test_unconfirmed_inhibit_recovers_when_demand_clears_or_target_drops(self):
+    CC, CS = make_cc(target_kph=87.0, set_speed_kph=89.0), make_cs(set_speed_kph=89.0)
+    sent = self._step(CC, CS, (ACC_FEEDBACK_TIMEOUT + 1) * (ACC_MAX_UNCONFIRMED + 1))
+    assert len(sent) == ACC_MAX_UNCONFIRMED * ACC_BUTTON_HOLD_FRAMES
+    assert self.cc.jve_inhibited["speed"] and self.cc.jve_inhibited_dir["speed"] == -1
+
+    # When target returns to current set speed (speed_dir == 0), transient unconfirmed inhibit clears
+    CC.actuators.speed = 89.0 * CV.KPH_TO_MS
+    self._step(CC, CS, 1)
+    assert not self.cc.jve_inhibited["speed"]
+
+    # Inhibit again during minor trim demand, then drop target for slower traffic (15:11:33 scenario)
+    CC.actuators.speed = 87.0 * CV.KPH_TO_MS
+    self._step(CC, CS, (ACC_FEEDBACK_TIMEOUT + 1) * (ACC_MAX_UNCONFIRMED + 1))
+    assert self.cc.jve_inhibited["speed"]
+    CC.actuators.speed = 70.0 * CV.KPH_TO_MS
+    recovered = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert not self.cc.jve_inhibited["speed"]
+    assert len(recovered) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in recovered)
+
+  def test_tick_b_suppressed_when_cruise_buttons_not_received(self):
+    CC, CS = make_cc(target_kph=72.0), make_cs(set_speed_kph=113.0)
+    sent_even, sent_odd = [], []
+    for i in range(ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES * 2 + 2):
+      CS.cruise_buttons_rx = (i % 2 == 0)
+      if CS.cruise_buttons_rx:
+        CS.button_counter = (CS.button_counter + 1) % 16
+      _, sends = self.cc.update(CC.as_reader(), CS, 0)
+      for addr, dat, bus in sends:
+        if addr == CRUISE_BUTTONS_CUSW:
+          assert self.safety.safety_tx_hook(libsafety_py.make_CANPacket(addr, bus, dat)), dat.hex()
+          (sent_even if CS.cruise_buttons_rx else sent_odd).append(bytes(dat))
+    assert sent_odd == []
+    assert len(sent_even) == ACC_BUTTON_HOLD_FRAMES
+
+    # Standstill resume also suppresses Tick-B frames when cruise_buttons_rx is False
+    CC_res, CS_res = make_cc(target_kph=0.0), make_cs(set_speed_kph=50.0)
+    CC_res.cruiseControl.resume = True
+    CS_res.out.cruiseState.standstill = True
+    CS_res.cruise_buttons_rx = False
+    for _ in range(6):
+      assert [a for a, _, _ in self.cc.update(CC_res.as_reader(), CS_res, 0)[1] if a == CRUISE_BUTTONS_CUSW] == []
+    CS_res.cruise_buttons_rx = True
+    CS_res.button_counter = (CS_res.button_counter + 1) % 16
+    res_frames = [d for a, d, _ in self.cc.update(CC_res.as_reader(), CS_res, 0)[1] if a == CRUISE_BUTTONS_CUSW]
+    assert len(res_frames) == 1 and res_frames[0][0] == 0x10
+
   def test_opposite_response_inhibits(self):
     CC, CS = make_cc(target_kph=72.0), make_cs(set_speed_kph=113.0)
     self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
@@ -267,12 +314,22 @@ class TestJvePilotCarStateCusw:
     parsers[Bus.pt].update([(10_000_000, msgs)])
     out = cs.update(parsers)
     assert cs.button_counter == 7
+    assert cs.cruise_buttons_rx
     assert cs.acc_follow_bars == 3
     assert cs.cruise_button_pressed
+    assert not out.accFaulted
     assert abs(out.vEgoCluster - 31.5) < 0.05
     assert out.cruiseState.enabled and abs(out.cruiseState.speed - 113 * CV.KPH_TO_MS) < 1e-3
     assert out.leftBlindspot and not out.rightBlindspot
     assert len(out.buttonEvents) == 1 and out.buttonEvents[0].type == structs.CarState.ButtonEvent.Type.accelCruise
+
+    # ACC_HUD byte 2 bits [5:0] == 0x3A signals ACC/FCW fault; repeated button counter marks cruise_buttons_rx False
+    parsers[Bus.pt].update([(20_000_000, [
+      packer.make_can_msg("ACC_HUD", 0, {"ACC_SET_SPEED_KMH": 113, "ACC_ICON": 0x3A, "DISTANCE_SETTING": 2}),
+    ])])
+    out_fault = cs.update(parsers)
+    assert out_fault.accFaulted
+    assert not cs.cruise_buttons_rx
 
     # verify CUSW lowSpeedAlert hysteresis (18.5 m/s up, 16.5 m/s down)
     for speed, expected_alert in [(17.5, True), (19.0, False), (17.5, False), (16.0, True), (17.5, True), (19.0, False)]:

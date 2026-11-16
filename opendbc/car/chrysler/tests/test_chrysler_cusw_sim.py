@@ -150,6 +150,7 @@ class Harness:
       _, sends = self.CI.apply(CC.as_reader(), self.t)
       for addr, dat, bus in sends:
         if addr == CRUISE_BUTTONS:
+          assert self.sim.frame % 2 == 0, "transmitted CRUISE_BUTTONS on Tick B without new SCCM frame"
           assert self.safety.safety_tx_hook(libsafety_py.make_CANPacket(addr, bus, dat)), f"Panda rejected {dat.hex()}"
           self.sent += 1
       self.sim.receive_from_openpilot(sends)

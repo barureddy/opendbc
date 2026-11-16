@@ -14,7 +14,8 @@ class CarState(CarStateBase):
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
 
     self.auto_high_beam = 0
-    self.button_counter = 0
+    self.button_counter = -1
+    self.cruise_buttons_rx = False
     self.lkas_car_model = -1
     self.low_speed_alert = True
 
@@ -119,7 +120,9 @@ class CarState(CarStateBase):
       ret.rightBlindspot = cp.vl["BSM_1"]["RIGHT_STATUS"] == 1
 
     self.lkas_car_model = cp_cam.vl["DAS_6"]["CAR_MODEL"]
-    self.button_counter = int(cp.vl["CRUISE_BUTTONS"]["COUNTER"])
+    button_counter = int(cp.vl["CRUISE_BUTTONS"]["COUNTER"])
+    self.cruise_buttons_rx = (button_counter != self.button_counter)
+    self.button_counter = button_counter
 
     ret.buttonEvents = self._create_cruise_button_events(cp)
 
@@ -170,7 +173,7 @@ class CarState(CarStateBase):
     ret.cruiseState.available = bool(cp.vl["ACC_CONTROL"]["ACC_MAIN_ON"])
     ret.cruiseState.enabled = bool(cp.vl["ACC_CONTROL"]["ACC_ACTIVE"])
     ret.cruiseState.standstill = ret.standstill and ret.cruiseState.enabled
-    # TODO: CUSW ACC fault signal not identified yet, so accFaulted stays False here (needs a route log with an ACC fault)
+    ret.accFaulted = int(cp.vl["ACC_HUD"]["ACC_ICON"]) == 0x3A
     # ASSUMPTION (unverified on CUSW): DISTANCE_SETTING 0..3 maps to 1..4 bars. CarController stops Auto Follow if
     # distance presses don't move this value as expected.
     self.acc_follow_bars = int(cp.vl["ACC_HUD"]["DISTANCE_SETTING"]) + 1
@@ -185,7 +188,9 @@ class CarState(CarStateBase):
       ret.rightBlindspot = bool(cp.vl["BSM_RIGHT"]["RIGHT_DETECTED"])
 
     self.lkas_car_model = cp_cam.vl["DAS_6"]["CAR_MODEL"]
-    self.button_counter = int(cp.vl["CRUISE_BUTTONS"]["COUNTER"])
+    button_counter = int(cp.vl["CRUISE_BUTTONS"]["COUNTER"])
+    self.cruise_buttons_rx = (button_counter != self.button_counter)
+    self.button_counter = button_counter
     ret.buttonEvents = self._create_cruise_button_events(cp)
 
     return ret
