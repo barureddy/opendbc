@@ -223,6 +223,85 @@ BO_ 512 ECM_TORQUE: 8 XXX
  SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
+BO_ 482 WHEEL_TORQUE_1: 8 XXX
+ SG_ WHEEL_TORQUE_OSC : 35|8@0+ (1,0) [0|255] "" XXX
+ SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 514 TCM_1: 8 XXX
+ SG_ TURBINE_RPM : 7|12@0+ (1,0) [0|4095] "rpm" XXX
+ SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 522 SHIFTER_1: 4 XXX
+ SG_ SHIFTER_TRANSITION : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ COUNTER : 19|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 31|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 524 STATUS_20C: 4 XXX
+ SG_ STATUS_FLAGS : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ COUNTER : 19|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 31|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 736 ESP_TORQUE: 8 XXX
+ SG_ DRIVETRAIN_TORQUE : 39|12@0+ (1,0) [0|4095] "Nm" XXX
+ SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 744 ESP_DECEL: 8 XXX
+ SG_ ACC_ACTIVE : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ DECEL_DEMAND : 19|12@0+ (1,0) [0|4095] "" XXX
+ SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 746 IGNITION_1: 5 XXX
+ SG_ IGNITION_RUN_STATUS : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ IGNITION_MODE : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ COUNTER : 27|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 39|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 750 STATUS_2EE: 3 XXX
+ SG_ STATUS_BYTE : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ COUNTER : 11|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 23|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 754 STOP_START_1: 8 XXX
+ SG_ MOVING_RELEASE_STATE : 15|16@0+ (1,0) [0|65535] "" XXX
+ SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 756 STOP_START_2: 5 XXX
+ SG_ STOP_HOLD_STATE : 7|16@0+ (1,0) [0|65535] "" XXX
+
+BO_ 758 IGNITION_STATE: 1 XXX
+ SG_ IGNITION_STATE : 7|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 994 STATUS_3E2: 4 XXX
+ SG_ ANALOG_VALUE : 23|16@0+ (1,0) [0|65535] "" XXX
+
+BO_ 998 IGNITION_2: 5 XXX
+ SG_ RUN_STATE : 31|16@0+ (1,0) [0|65535] "" XXX
+
+BO_ 1002 ECM_3: 8 XXX
+ SG_ ENGINE_LOAD_PCT : 39|8@0+ (0.4,0) [0|100] "%" XXX
+ SG_ ENGINE_RPM_COARSE : 55|8@0+ (32,0) [0|8160] "rpm" XXX
+
+BO_ 1242 ENGINE_LOAD_1: 8 XXX
+ SG_ ENGINE_LOAD : 7|8@0+ (0.4,0) [0|100] "%" XXX
+ SG_ THROTTLE_ACTUATOR : 31|8@0+ (0.4,0) [0|100] "%" XXX
+
+BO_ 1244 BRAKE_THERMAL: 8 XXX
+ SG_ BRAKE_PEDAL_STATE : 1|2@0+ (1,0) [0|3] "" XXX
+ SG_ THERMAL_1 : 7|6@0+ (1,0) [0|63] "" XXX
+ SG_ THERMAL_2 : 15|8@0+ (1,-40) [-40|215] "degC" XXX
+ SG_ SENSOR_COMP_A : 31|8@0+ (1,0) [0|255] "" XXX
+ SG_ SENSOR_COMP_B : 39|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 1246 POWERTRAIN_THERMAL: 8 XXX
+ SG_ TEMP_1 : 7|8@0+ (1,-40) [-40|215] "degC" XXX
+ SG_ TEMP_2 : 15|8@0+ (1,-40) [-40|215] "degC" XXX
+ SG_ TORQUE_FUEL_DEMAND : 39|16@0+ (1,0) [0|65535] "" XXX
+
 BO_ 1252 ABS_SPEED_1: 8 XXX
  SG_ VEHICLE_SPEED : 23|16@0+ (0.0174,0) [0|4095] "m/s" XXX
  SG_ TIMER_1_MS : 39|16@0+ (1,0) [0|65535] "ms" XXX
@@ -254,6 +333,40 @@ BO_ 1268 ABS_SPEED_2: 8 XXX
 BO_ 1492 DAS_LEAD: 4 XXX
  SG_ LEAD_CAR : 23|4@0+ (1,0) [0|15] "" XXX
 
+BO_ 1496 LIGHTS_1: 6 XXX
+ SG_ LEFT_TURN_SIGNAL_ON : 7|1@0+ (1,0) [0|1] "" XXX
+ SG_ RIGHT_TURN_SIGNAL_ON : 6|1@0+ (1,0) [0|1] "" XXX
+ SG_ BRAKE_LIGHTS_ON : 15|1@0+ (1,0) [0|1] "" XXX
+ SG_ TURN_SIGNAL_FLASHER : 22|1@0+ (1,0) [0|1] "" XXX
+
+BO_ 1504 STATUS_5E0: 7 XXX
+ SG_ STATUS_FLAGS : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ COUNTER : 43|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 55|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 1510 ACC_3: 8 XXX
+ SG_ ACC_ENGAGED : 1|2@0+ (1,0) [0|3] "" XXX
+ SG_ DRIVE_HOLD_STATE : 23|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 1625 FUEL_LEVEL: 4 XXX
+ SG_ FUEL_LEVEL_RAW : 7|16@0+ (1,0) [0|65535] "" XXX
+
+BO_ 1627 PARK_SHUTDOWN: 1 XXX
+ SG_ PARK_SHUTDOWN_STATUS : 7|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 1752 RADAR_STATUS_1: 2 XXX
+ SG_ ACC_ENGAGED : 0|1@0+ (1,0) [0|1] "" XXX
+ SG_ ACC_FCW_FAULT : 14|1@0+ (1,0) [0|1] "" XXX
+
+BO_ 1756 RADAR_STATUS_2: 4 XXX
+ SG_ RADAR_STATE : 7|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 1992 IPC_CLOCK: 8 XXX
+ SG_ SECONDS_COUNTER : 55|16@0+ (0.1,0) [0|6553.5] "s" XXX
+
+BO_ 1999 ODOMETER: 5 XXX
+ SG_ ODOMETER_KM : 7|24@0+ (1,0) [0|16777215] "km" XXX
+
 
 CM_ SG_ 1250 TRUNK "1 = open, 0 = closed";
 CM_ SG_ 1250 DOOR_OPEN_FL "1 = open, 0 = closed";
@@ -271,4 +384,13 @@ CM_ SG_ 498 ACC_STATUS_1 "0x00 = acc off, 0x03 = acc on, green, 0x02 acc on, whi
 CM_ SG_ 1006 ACC_STATE "0 = ACC off, 6 = ACC active (white), 8 = ACC engaged (green)";
 CM_ SG_ 502 LKAS_STATE "2 = active (green), 1 = error";
 CM_ SG_ 1006 ACC_SET_SPEED_KMH "min set appears to be 68 km/h, errors below 59 km/h ";
+CM_ SG_ 522 SHIFTER_TRANSITION "0x00 steady state, 0x18 D<->N, 0x10 N<->R, 0x08 R<->P transition";
+CM_ SG_ 746 IGNITION_RUN_STATUS "0x84 ignition RUN, 0x83/0x80 ignition OFF shutdown";
+CM_ SG_ 754 MOVING_RELEASE_STATE "0xFFFF moving/released, 0x00F0 low-speed braking/stop hold";
+CM_ SG_ 756 STOP_HOLD_STATE "0x1FFF moving/released, 0x8001 low-speed braking/stop hold";
+CM_ SG_ 758 IGNITION_STATE "0x32 ignition RUN, 0x01 ignition OFF";
+CM_ SG_ 1244 BRAKE_PEDAL_STATE "0 = released, 1 = brake pedal pressed";
+CM_ SG_ 1496 TURN_SIGNAL_FLASHER "1 Hz exterior turn signal bulb flasher state";
+CM_ SG_ 1510 DRIVE_HOLD_STATE "0x06 moving/released, 0x02 low-speed braking/stop hold";
+CM_ SG_ 1752 ACC_FCW_FAULT "1 during ACC/FCW fault (ACC_ICON == 0x3A)";
 VAL_ 1262 PRNDL 1 "P" 2 "R" 3 "N" 4 "D" 5 "S";
