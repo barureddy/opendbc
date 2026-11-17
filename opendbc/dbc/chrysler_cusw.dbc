@@ -38,10 +38,12 @@ BU_: XXX
 
 BO_ 492 EPS_STATUS: 8 XXX
  SG_ TORQUE_DRIVER : 3|12@0+ (1,-1024) [0|2048] "Nm" XXX
+ SG_ AUTO_PARK_ACTIVE_1 : 5|1@0+ (1,0) [0|1] "" XXX
  SG_ LKAS_STATE : 16|1@0+ (1,0) [0|1] "" XXX
  SG_ LKAS_FAULT : 17|1@0+ (1,0) [0|1] "" XXX
  SG_ LKAS_HIGH_TORQUE : 19|1@0+ (1,0) [0|1] "" XXX
  SG_ TORQUE_MOTOR : 27|12@0+ (1,-2048) [0|1] "" XXX
+ SG_ AUTO_PARK_ACTIVE_2 : 30|1@0+ (1,0) [0|1] "" XXX
  SG_ LAT_TORQUE_REQUEST : 47|12@0+ (1,-2048) [0|4095] "" XXX
  SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
@@ -238,8 +240,11 @@ BO_ 522 SHIFTER_1: 4 XXX
  SG_ COUNTER : 19|4@0+ (1,0) [0|15] "" XXX
  SG_ CHECKSUM : 31|8@0+ (1,0) [0|255] "" XXX
 
-BO_ 524 STATUS_20C: 4 XXX
- SG_ STATUS_FLAGS : 7|8@0+ (1,0) [0|255] "" XXX
+BO_ 524 AUTO_PARK_REQUEST: 4 XXX
+ SG_ AUTO_PARK_CMD : 7|11@0+ (1,-1024) [-1024|1023] "" XXX
+ SG_ AUTO_PARK_CONTROL_BIT : 12|1@0+ (1,0) [0|1] "" XXX
+ SG_ AUTO_PARK_ACTIVE : 9|1@0+ (1,0) [0|1] "" XXX
+ SG_ AUTO_PARK_STANDBY : 20|1@0+ (1,0) [0|1] "" XXX
  SG_ COUNTER : 19|4@0+ (1,0) [0|15] "" XXX
  SG_ CHECKSUM : 31|8@0+ (1,0) [0|255] "" XXX
 
@@ -266,7 +271,10 @@ BO_ 750 STATUS_2EE: 3 XXX
  SG_ CHECKSUM : 23|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 754 STOP_START_1: 8 XXX
+ SG_ PARKSENSE_ALERT : 6|1@0+ (1,0) [0|1] "" XXX
  SG_ MOVING_RELEASE_STATE : 15|16@0+ (1,0) [0|65535] "" XXX
+ SG_ PARKSENSE_REAR_ACTIVE : 37|1@0+ (1,0) [0|1] "" XXX
+ SG_ PARKSENSE_REAR_DIST : 35|12@0+ (1,0) [0|4095] "" XXX
  SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
@@ -333,11 +341,14 @@ BO_ 1268 ABS_SPEED_2: 8 XXX
 BO_ 1492 DAS_LEAD: 4 XXX
  SG_ LEAD_CAR : 23|4@0+ (1,0) [0|15] "" XXX
 
+BO_ 1494 AUTO_PARK_BUTTON: 4 XXX
+ SG_ AUTO_PARK_TOGGLE : 4|1@0+ (1,0) [0|1] "" XXX
+
 BO_ 1496 LIGHTS_1: 6 XXX
- SG_ LEFT_TURN_SIGNAL_ON : 7|1@0+ (1,0) [0|1] "" XXX
- SG_ RIGHT_TURN_SIGNAL_ON : 6|1@0+ (1,0) [0|1] "" XXX
+ SG_ TURN_SIGNAL_ON : 7|1@0+ (1,0) [0|1] "" XXX
  SG_ BRAKE_LIGHTS_ON : 15|1@0+ (1,0) [0|1] "" XXX
- SG_ TURN_SIGNAL_FLASHER : 22|1@0+ (1,0) [0|1] "" XXX
+ SG_ LEFT_TURN_FLASHER : 22|1@0+ (1,0) [0|1] "" XXX
+ SG_ RIGHT_TURN_FLASHER : 21|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 1504 STATUS_5E0: 7 XXX
  SG_ STATUS_FLAGS : 7|8@0+ (1,0) [0|255] "" XXX
@@ -346,7 +357,10 @@ BO_ 1504 STATUS_5E0: 7 XXX
 
 BO_ 1510 ACC_3: 8 XXX
  SG_ ACC_ENGAGED : 1|2@0+ (1,0) [0|3] "" XXX
- SG_ DRIVE_HOLD_STATE : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ AUTO_PARK_PROMPT : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ AUTO_PARK_MODE_ACTIVE : 21|1@0+ (1,0) [0|1] "" XXX
+ SG_ DRIVE_HOLD_STATE : 19|4@0+ (1,0) [0|15] "" XXX
+ SG_ AUTO_PARK_HUD_ON : 49|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 1625 FUEL_LEVEL: 4 XXX
  SG_ FUEL_LEVEL_RAW : 7|16@0+ (1,0) [0|65535] "" XXX
@@ -389,8 +403,15 @@ CM_ SG_ 746 IGNITION_RUN_STATUS "0x84 ignition RUN, 0x83/0x80 ignition OFF shutd
 CM_ SG_ 754 MOVING_RELEASE_STATE "0xFFFF moving/released, 0x00F0 low-speed braking/stop hold";
 CM_ SG_ 756 STOP_HOLD_STATE "0x1FFF moving/released, 0x8001 low-speed braking/stop hold";
 CM_ SG_ 758 IGNITION_STATE "0x32 ignition RUN, 0x01 ignition OFF";
+CM_ SG_ 524 AUTO_PARK_CMD "Signed steering torque command from PAM during active self-parking (offset -1024, r=+0.975 with EPS_STATUS.TORQUE_MOTOR)";
+CM_ SG_ 524 AUTO_PARK_CONTROL_BIT "1 when PAM is actively steering the wheel (100 Hz mode)";
+CM_ SG_ 524 AUTO_PARK_ACTIVE "1 during active self-parking torque control";
+CM_ SG_ 524 AUTO_PARK_STANDBY "1 from ParkSense button press while searching / parking / awaiting shift";
 CM_ SG_ 1244 BRAKE_PEDAL_STATE "0 = released, 1 = brake pedal pressed";
-CM_ SG_ 1496 TURN_SIGNAL_FLASHER "1 Hz exterior turn signal bulb flasher state";
+CM_ SG_ 1494 AUTO_PARK_TOGGLE "Pulses 1 when ParkSense self-parking button is pressed";
+CM_ SG_ 1496 LEFT_TURN_FLASHER "1 Hz exterior left turn signal bulb flasher state";
+CM_ SG_ 1496 RIGHT_TURN_FLASHER "1 Hz exterior right turn signal bulb flasher state";
+CM_ SG_ 1510 AUTO_PARK_PROMPT "ParkSense UI guidance/prompt code (0x02 searching/forward, 0x3c/0x44 reverse/spot, 0x48 pull forward, 0x1e stop/shift)";
 CM_ SG_ 1510 DRIVE_HOLD_STATE "0x06 moving/released, 0x02 low-speed braking/stop hold";
 CM_ SG_ 1752 ACC_FCW_FAULT "1 during ACC/FCW fault (ACC_ICON == 0x3A)";
 VAL_ 1262 PRNDL 1 "P" 2 "R" 3 "N" 4 "D" 5 "S";
