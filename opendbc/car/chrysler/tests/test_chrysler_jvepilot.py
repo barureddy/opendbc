@@ -369,6 +369,11 @@ class TestJvePilotCarStateCusw:
       ("ECM_2", 100),
       ("ACC_2", 100),
       ("WHEEL_PULSES", 50),
+      ("EPS_STATUS", 100),
+      ("SHIFTER_1", 50),
+      ("GEAR", 10),
+      ("RFHM_START_STOP", 5),
+      ("AUTO_PARK_BUTTON", 4),
     ], 0)
     msgs = [
       packer.make_can_msg("EPS_STATUS_2", 0, {"LONG_ACCEL": 0.5, "LATERAL_ACCEL": -0.3, "YAW_RATE": 0.1}),
@@ -377,6 +382,12 @@ class TestJvePilotCarStateCusw:
       packer.make_can_msg("ECM_2", 0, {"PEDAL_DEMAND": 24.0, "ENGINE_DRAG_TORQUE": -20}),
       packer.make_can_msg("ACC_2", 0, {"ACC_STATUS_1": 1, "ACC_DECEL_CMD": 8000}),
       packer.make_can_msg("WHEEL_PULSES", 0, {"WHEEL_PULSE_FL": 42, "WHEEL_PULSE_FR": 43, "WHEEL_PULSE_RL": 44, "WHEEL_PULSE_RR": 45}),
+      # Real captured CUSW Park frames (EPS normal w/ 0x20C present, SHIFTER_1 in P, GEAR in P, RFHM button, Auto-Park buttons)
+      (0x1EC, bytes.fromhex("04053027d580dd30"), 0),
+      (0x20A, bytes.fromhex("00080e0d"), 0),
+      (0x4EE, bytes.fromhex("04410f00100012e6"), 0),
+      packer.make_can_msg("RFHM_START_STOP", 0, {"START_STOP_BUTTON_EVENT": 0x21, "KEY_FOB_VALID": 1}),
+      packer.make_can_msg("AUTO_PARK_BUTTON", 0, {"PARKSENSE_BUTTON": 1, "LANESENSE_BUTTON": 1, "AUTO_START_STOP_BUTTON": 1}),
     ]
     parser.update([(10_000_000, msgs)])
     assert abs(parser.vl["EPS_STATUS_2"]["LONG_ACCEL"] - 0.5) < 0.02
@@ -387,4 +398,34 @@ class TestJvePilotCarStateCusw:
     assert parser.vl["ECM_TORQUE"]["REQUESTED_ENGINE_TORQUE"] == 150
     assert parser.vl["ECM_TORQUE"]["EXPECTED_ENGINE_TORQUE"] == 148
     assert parser.vl["WHEEL_PULSES"]["WHEEL_PULSE_FL"] == 42
+    assert parser.vl["EPS_STATUS"]["AUTO_PARK_FAULT_1"] == 0
+    assert parser.vl["EPS_STATUS"]["EPS_READY"] == 3
+    assert parser.vl["EPS_STATUS"]["EPS_TORQUE_VALID"] == 1
+    assert parser.vl["EPS_STATUS"]["AUTO_PARK_FAULT_2"] == 0
+    assert parser.vl["SHIFTER_1"]["SHIFTER_POSITION"] == 1
+    assert parser.vl["GEAR"]["PRNDL"] == 1
+    assert parser.vl["GEAR"]["PARK_PAWL_LOCKED"] == 1
+    assert parser.vl["GEAR"]["COUNTER"] == 2
+    assert parser.vl["GEAR"]["CHECKSUM"] == 0xE6
+    assert parser.vl["RFHM_START_STOP"]["START_STOP_BUTTON_EVENT"] == 0x21
+    assert parser.vl["RFHM_START_STOP"]["KEY_FOB_VALID"] == 1
+    assert parser.vl["AUTO_PARK_BUTTON"]["PARKSENSE_BUTTON"] == 1
+    assert parser.vl["AUTO_PARK_BUTTON"]["LANESENSE_BUTTON"] == 1
+    assert parser.vl["AUTO_PARK_BUTTON"]["AUTO_START_STOP_BUTTON"] == 1
+
+    # Verify real captured PAM-absent fault frame (0x1EC) and Drive frames (0x20A / 0x4EE)
+    parser.update([(20_000_000, [
+      (0x1EC, bytes.fromhex("840100a7d08014c7"), 0),
+      (0x20A, bytes.fromhex("002006ca"), 0),
+      (0x4EE, bytes.fromhex("0544000000001f1d"), 0),
+    ])])
+    assert parser.vl["EPS_STATUS"]["AUTO_PARK_FAULT_1"] == 1
+    assert parser.vl["EPS_STATUS"]["EPS_READY"] == 0
+    assert parser.vl["EPS_STATUS"]["EPS_TORQUE_VALID"] == 1
+    assert parser.vl["EPS_STATUS"]["AUTO_PARK_FAULT_2"] == 1
+    assert parser.vl["SHIFTER_1"]["SHIFTER_POSITION"] == 4
+    assert parser.vl["GEAR"]["PRNDL"] == 4
+    assert parser.vl["GEAR"]["PARK_PAWL_LOCKED"] == 0
+    assert parser.vl["GEAR"]["COUNTER"] == 15
+    assert parser.vl["GEAR"]["CHECKSUM"] == 0x1D
     assert parser.vl["WHEEL_PULSES"]["WHEEL_PULSE_RR"] == 45

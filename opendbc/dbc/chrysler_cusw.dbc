@@ -39,11 +39,15 @@ BU_: XXX
 BO_ 492 EPS_STATUS: 8 XXX
  SG_ TORQUE_DRIVER : 3|12@0+ (1,-1024) [0|2048] "Nm" XXX
  SG_ AUTO_PARK_ACTIVE_1 : 5|1@0+ (1,0) [0|1] "" XXX
+ SG_ AUTO_PARK_FAULT_1 : 7|1@0+ (1,0) [0|1] "" XXX
  SG_ LKAS_STATE : 16|1@0+ (1,0) [0|1] "" XXX
  SG_ LKAS_FAULT : 17|1@0+ (1,0) [0|1] "" XXX
  SG_ LKAS_HIGH_TORQUE : 19|1@0+ (1,0) [0|1] "" XXX
+ SG_ EPS_READY : 21|2@0+ (1,0) [0|3] "" XXX
  SG_ TORQUE_MOTOR : 27|12@0+ (1,-2048) [0|1] "" XXX
+ SG_ EPS_TORQUE_VALID : 29|1@0+ (1,0) [0|1] "" XXX
  SG_ AUTO_PARK_ACTIVE_2 : 30|1@0+ (1,0) [0|1] "" XXX
+ SG_ AUTO_PARK_FAULT_2 : 31|1@0+ (1,0) [0|1] "" XXX
  SG_ LAT_TORQUE_REQUEST : 47|12@0+ (1,-2048) [0|4095] "" XXX
  SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
  SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
@@ -57,6 +61,9 @@ BO_ 1250 DOORS: 8 XXX
 
 BO_ 1262 GEAR: 8 XXX
  SG_ PRNDL : 11|4@0+ (1,0) [0|15] "" XXX
+ SG_ PARK_PAWL_LOCKED : 36|1@0+ (1,0) [0|1] "" XXX
+ SG_ COUNTER : 51|4@0+ (1,0) [0|15] "" XXX
+ SG_ CHECKSUM : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 875 SEATBELT_STATUS: 8 XXX
  SG_ SEATBELT_DRIVER_UNLATCHED : 16|1@0+ (1,0) [0|1] "" XXX
@@ -237,6 +244,7 @@ BO_ 514 TCM_1: 8 XXX
 
 BO_ 522 SHIFTER_1: 4 XXX
  SG_ SHIFTER_TRANSITION : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ SHIFTER_POSITION : 14|4@0+ (1,0) [0|15] "" XXX
  SG_ COUNTER : 19|4@0+ (1,0) [0|15] "" XXX
  SG_ CHECKSUM : 31|8@0+ (1,0) [0|255] "" XXX
 
@@ -283,6 +291,10 @@ BO_ 756 STOP_START_2: 5 XXX
 
 BO_ 758 IGNITION_STATE: 1 XXX
  SG_ IGNITION_STATE : 7|8@0+ (1,0) [0|255] "" XXX
+
+BO_ 760 RFHM_START_STOP: 5 XXX
+ SG_ START_STOP_BUTTON_EVENT : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ KEY_FOB_VALID : 21|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 994 STATUS_3E2: 4 XXX
  SG_ ANALOG_VALUE : 23|16@0+ (1,0) [0|65535] "" XXX
@@ -343,6 +355,9 @@ BO_ 1492 DAS_LEAD: 4 XXX
 
 BO_ 1494 AUTO_PARK_BUTTON: 4 XXX
  SG_ AUTO_PARK_TOGGLE : 4|1@0+ (1,0) [0|1] "" XXX
+ SG_ PARKSENSE_BUTTON : 5|1@0+ (1,0) [0|1] "" XXX
+ SG_ LANESENSE_BUTTON : 6|1@0+ (1,0) [0|1] "" XXX
+ SG_ AUTO_START_STOP_BUTTON : 7|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 1496 LIGHTS_1: 6 XXX
  SG_ TURN_SIGNAL_ON : 7|1@0+ (1,0) [0|1] "" XXX
@@ -397,21 +412,35 @@ CM_ SG_ 498 ACC_STATUS_2 "1 no ACC, 3 icpno ";
 CM_ SG_ 498 ACC_STATUS_1 "0x00 = acc off, 0x03 = acc on, green, 0x02 acc on, white";
 CM_ SG_ 1006 ACC_STATE "0 = ACC off, 6 = ACC active (white), 8 = ACC engaged (green)";
 CM_ SG_ 502 LKAS_STATE "2 = active (green), 1 = error";
-CM_ SG_ 1006 ACC_SET_SPEED_KMH "min set appears to be 68 km/h, errors below 59 km/h ";
-CM_ SG_ 522 SHIFTER_TRANSITION "0x00 steady state, 0x18 D<->N, 0x10 N<->R, 0x08 R<->P transition";
+CM_ SG_ 1006 ACC_SET_SPEED_KMH "Minimum selectable ACC set speed is 32 km/h (20 mph) on 2019 Jeep Cherokee";
+CM_ SG_ 492 AUTO_PARK_FAULT_1 "1 when PAM 0x20C standby/control message is missing or Auto-Park faulted";
+CM_ SG_ 492 EPS_READY "EPS status nibble bits: 3 = normal/ready, 0 = faulted (missing PAM 0x20C)";
+CM_ SG_ 492 EPS_TORQUE_VALID "1 when EPS steering torque output is normal/valid";
+CM_ SG_ 492 AUTO_PARK_FAULT_2 "1 when PAM 0x20C standby/control message is missing or Auto-Park faulted";
+CM_ SG_ 1262 PARK_PAWL_LOCKED "1 when Park pawl is engaged, 0 in R/N/D";
+CM_ SG_ 522 SHIFTER_TRANSITION "Raw byte 1 of 50 Hz ESM shifter status (0x08=P, 0x10=R, 0x18=N, 0x20=D, 0x00=transition)";
+CM_ SG_ 522 SHIFTER_POSITION "50 Hz ESM shifter position: 1 = P (0x08), 2 = R (0x10), 3 = N (0x18), 4 = D (0x20), 0 = shifting transition";
 CM_ SG_ 746 IGNITION_RUN_STATUS "0x84 ignition RUN, 0x83/0x80 ignition OFF shutdown";
-CM_ SG_ 754 MOVING_RELEASE_STATE "0xFFFF moving/released, 0x00F0 low-speed braking/stop hold";
-CM_ SG_ 756 STOP_HOLD_STATE "0x1FFF moving/released, 0x8001 low-speed braking/stop hold";
-CM_ SG_ 758 IGNITION_STATE "0x32 ignition RUN, 0x01 ignition OFF";
+CM_ SG_ 754 MOVING_RELEASE_STATE "Transmitted by PAM module alongside 0x20C; 0xFFFF moving/released, 0x00F0 low-speed braking/stop hold";
+CM_ SG_ 756 STOP_HOLD_STATE "Transmitted by PAM module alongside 0x20C; 0x1FFF moving/released, 0x8001 low-speed braking/stop hold";
+CM_ SG_ 758 IGNITION_STATE "0x01 OFF, 0x2E ACC, 0x32 RUN, 0x36 START";
+CM_ SG_ 760 START_STOP_BUTTON_EVENT "RFHM (0xC7) Start/Stop button event code on press/hold; 0 when idle";
+CM_ SG_ 760 KEY_FOB_VALID "1 when key fob is detected valid during Start/Stop button press";
 CM_ SG_ 524 AUTO_PARK_CMD "Signed steering torque command from PAM during active self-parking (offset -1024, r=+0.975 with EPS_STATUS.TORQUE_MOTOR)";
 CM_ SG_ 524 AUTO_PARK_CONTROL_BIT "1 when PAM is actively steering the wheel (100 Hz mode)";
 CM_ SG_ 524 AUTO_PARK_ACTIVE "1 during active self-parking torque control";
 CM_ SG_ 524 AUTO_PARK_STANDBY "1 from ParkSense button press while searching / parking / awaiting shift";
 CM_ SG_ 1244 BRAKE_PEDAL_STATE "0 = released, 1 = brake pedal pressed";
 CM_ SG_ 1494 AUTO_PARK_TOGGLE "Pulses 1 when ParkSense self-parking button is pressed";
+CM_ SG_ 1494 PARKSENSE_BUTTON "Pulses 1 when ParkSense off/on center-stack button is pressed";
+CM_ SG_ 1494 LANESENSE_BUTTON "Pulses 1 when LaneSense center-stack button is pressed";
+CM_ SG_ 1494 AUTO_START_STOP_BUTTON "Pulses 1 when Auto Start/Stop off center-stack button is pressed";
 CM_ SG_ 1496 LEFT_TURN_FLASHER "1 Hz exterior left turn signal bulb flasher state";
 CM_ SG_ 1496 RIGHT_TURN_FLASHER "1 Hz exterior right turn signal bulb flasher state";
+CM_ SG_ 1510 ACC_ENGAGED "Transmitted by PAM module alongside 0x20C (stops if PAM is offline)";
 CM_ SG_ 1510 AUTO_PARK_PROMPT "ParkSense UI guidance/prompt code (0x02 searching/forward, 0x3c/0x44 reverse/spot, 0x48 pull forward, 0x1e stop/shift)";
 CM_ SG_ 1510 DRIVE_HOLD_STATE "0x06 moving/released, 0x02 low-speed braking/stop hold";
 CM_ SG_ 1752 ACC_FCW_FAULT "1 during ACC/FCW fault (ACC_ICON == 0x3A)";
+VAL_ 522 SHIFTER_POSITION 0 "TRANSITION" 1 "P" 2 "R" 3 "N" 4 "D";
+VAL_ 758 IGNITION_STATE 1 "OFF" 46 "ACC" 50 "RUN" 54 "START";
 VAL_ 1262 PRNDL 1 "P" 2 "R" 3 "N" 4 "D" 5 "S";
