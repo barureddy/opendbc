@@ -9,7 +9,7 @@ from opendbc.car.interfaces import CarControllerBase
 
 # jvePilot hybrid ACC button control parameters
 ACC_BUTTON_HOLD_FRAMES = 5    # 5 SCCM-synced Tick-A pulses (~100 ms across 5 distinct 50 Hz SCCM counters)
-ACC_BUTTON_STEP = 15          # 150 ms release cooldown after the last pulse before starting the next virtual press
+ACC_BUTTON_STEP = 18          # 180 ms release cooldown after the last pulse before starting the next virtual press
 ACC_FEEDBACK_TIMEOUT = 51     # 510 ms (odd) for a press to show up in the stock ACC set speed / distance before it counts as unconfirmed
 ACC_MAX_UNCONFIRMED = 3       # consecutive unconfirmed presses before that button type is disabled until the next engagement
 # Set-speed change per press. Starts at 1 mph and is learned from CAN feedback (1 km/h on metric cars; 1 mph shows up
@@ -52,6 +52,10 @@ class CarController(CarControllerBase):
     self.jve_last_v_target = None
     self.jve_speed_floor = None    # learned stock ACC min set speed (m/s) for this engagement
     self.jve_speed_ceiling = None  # learned stock ACC max set speed (m/s) for this engagement
+    self.jve_floor_target = None
+    self.jve_floor_vego = None
+    self.jve_last_speed_dir = 0
+    self.jve_last_speed_frame = -1000
 
   def _jve_inhibit(self, kind, reason, direction=0):
     if not self.jve_inhibited[kind]:
@@ -97,6 +101,8 @@ class CarController(CarControllerBase):
       if kind == "speed":
         if direction < 0 and ref < LEARN_FLOOR_BELOW and self.jve_unconfirmed[kind] + 1 >= 2:
           self.jve_speed_floor = ref
+          self.jve_floor_target = self.jve_last_v_target
+          self.jve_floor_vego = cs_out.vEgo
           self.jve_unconfirmed[kind] = 0
           return
         elif direction > 0 and ref > LEARN_CEILING_ABOVE and self.jve_unconfirmed[kind] + 1 >= 2:
@@ -113,19 +119,25 @@ class CarController(CarControllerBase):
     v_target = max(CC.actuators.speed, MIN_ACC_SET_SPEED)
     if CC.hudControl.setSpeed > 0:
       v_target = min(v_target, CC.hudControl.setSpeed)
-    if getattr(CS, "acc_lead_detected", False) and getattr(CS, "acc_lead_distance", 0.0) > 0.0:
-      time_gap = 0.6 + 0.4 * min(max(int(getattr(CS, "acc_follow_bars", 2)), 1), 4)
-      v_radar_cap = max(MIN_ACC_SET_SPEED, (float(CS.acc_lead_distance) - 4.0) / time_gap)
-      v_target = min(v_target, v_radar_cap)
     self.jve_last_v_target = v_target
+
+    if self.jve_speed_floor is not None and (
+        abs(v_acc - self.jve_speed_floor) > 0.1 or
+        v_target >= self.jve_speed_floor - 0.1 or
+        (self.jve_floor_target is not None and abs(v_target - self.jve_floor_target) >= 2.0 * DEFAULT_SET_SPEED_STEP) or
+        (self.jve_floor_vego is not None and cs_out.vEgo < self.jve_floor_vego - 1.0)):
+      self.jve_speed_floor = None
+      self.jve_floor_target = None
+      self.jve_floor_vego = None
 
     at_ceiling = self.jve_speed_ceiling is not None and v_acc >= self.jve_speed_ceiling - 0.1
     at_floor = v_acc <= MIN_ACC_SET_SPEED + 0.1 or (self.jve_speed_floor is not None and v_acc <= self.jve_speed_floor + 0.1)
     threshold = (self.jve_set_speed_step or DEFAULT_SET_SPEED_STEP) / 2 + SET_SPEED_MARGIN
+    rev_margin = 0.20 if (self.frame - self.jve_last_speed_frame) < 150 else 0.0
     speed_dir = 0
-    if v_target > v_acc + threshold and not at_ceiling:
+    if v_target > v_acc + threshold + (rev_margin if self.jve_last_speed_dir < 0 else 0.0) and not at_ceiling:
       speed_dir = 1
-    elif v_target < v_acc - threshold and not at_floor:
+    elif v_target < v_acc - threshold - (rev_margin if self.jve_last_speed_dir > 0 else 0.0) and not at_floor:
       speed_dir = -1
     if self.jve_inhibited["speed"] and self.jve_inhibited_dir["speed"] != 0 and (
         speed_dir == 0 or
@@ -136,6 +148,8 @@ class CarController(CarControllerBase):
       self.jve_unconfirmed["speed"] = 0
       self.jve_inhibited_target = None
     if not self.jve_inhibited["speed"] and speed_dir != 0:
+      self.jve_last_speed_dir = speed_dir
+      self.jve_last_speed_frame = self.frame
       return "speed", speed_dir, ({"accel": True} if speed_dir > 0 else {"decel": True})
 
     # Auto Follow: only act on a known stock ACC bar setting reported on CAN

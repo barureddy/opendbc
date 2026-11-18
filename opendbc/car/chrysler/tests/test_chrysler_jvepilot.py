@@ -199,13 +199,11 @@ class TestJvePilotCarController:
     # target below FCA minimum while at minimum: no decel
     assert self._step(make_cc(target_kph=10.0), make_cs(set_speed_kph=32.0), 100) == []
 
-  def test_radar_lead_distance_caps_target_speed(self):
+  def test_radar_lead_distance_does_not_override_planner_target(self):
     CC, CS = make_cc(target_kph=113.0, set_speed_kph=113.0), make_cs(set_speed_kph=113.0, bars=2)
     CS.acc_lead_detected = True
-    CS.acc_lead_distance = 18.0
-    sent = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
-    assert len(sent) == ACC_BUTTON_HOLD_FRAMES
-    assert all((d[0] & 0x08) and not (d[0] & 0x04) for _, d in sent)
+    CS.acc_lead_distance = 23.0
+    assert self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES) == []
 
   def test_single_missed_decel_at_43mph_does_not_latch_false_floor(self):
     CC, CS = make_cc(target_kph=50.0, set_speed_kph=72.0), make_cs(set_speed_kph=69.0)  # 43 mph
@@ -219,6 +217,19 @@ class TestJvePilotCarController:
     self._step(CC, CS, ACC_FEEDBACK_TIMEOUT + 1)
     assert self.cc.jve_speed_floor == pytest.approx(69.0 * CV.KPH_TO_MS)
     assert not self.cc.jve_inhibited["speed"]
+    # If target drops by >= 2 mph or ego speed drops > 1 m/s, learned floor clears so decel resumes
+    CC.actuators.speed = 40.0 * CV.KPH_TO_MS
+    down = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert self.cc.jve_speed_floor is None
+    assert len(down) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in down)
+    # Re-learn floor, confirm ego drop also clears it, and verify upward control works
+    self._step(CC, CS, (ACC_FEEDBACK_TIMEOUT + 1) * 2)
+    assert self.cc.jve_speed_floor == pytest.approx(69.0 * CV.KPH_TO_MS)
+    CS.out.vEgo = 29.0
+    down2 = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert self.cc.jve_speed_floor is None
+    assert len(down2) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in down2)
+    CS.out.cruiseState.speed = 68.0 * CV.KPH_TO_MS
     # When target rises back to 72 km/h, SET+ is sent immediately to restore dashboard set speed
     CC.actuators.speed = 72.0 * CV.KPH_TO_MS
     up = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
