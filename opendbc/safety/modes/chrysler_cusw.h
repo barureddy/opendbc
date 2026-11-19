@@ -101,15 +101,14 @@ static bool chrysler_cusw_tx_hook(const CANPacket_t *msg) {
       // LKAS active bit must be set while commanding non-zero torque
       violation |= (desired_torque != 0) && !steer_req;
 
-      // Keep global state reset so re-engage starts clean
-      desired_torque_last = 0;
-      rt_torque_last = 0;
-
+      // Keep global state synced with ramp-down so re-engage (including mid-ramp) is clean
+      // and a 1-frame pipeline delay on disengage only drops that frame instead of blocking the whole ramp-down
       if (violation) {
-        chrysler_cusw_torque_last = 0;
         tx = false;
       } else {
         chrysler_cusw_torque_last = desired_torque;
+        desired_torque_last = desired_torque;
+        rt_torque_last = desired_torque;
       }
     } else {
       // Ramp-down complete or never started: torque must be zero

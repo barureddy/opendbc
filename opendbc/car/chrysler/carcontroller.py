@@ -14,6 +14,7 @@ class CarController(CarControllerBase):
     self.hud_count = 0
     self.last_lkas_falling_edge = 0
     self.lkas_control_bit_prev = False
+    self.lkas_control_bit_cmd_prev = False
     self.last_button_frame = 0
 
     self.packer = CANPacker(dbc_names[Bus.pt])
@@ -22,7 +23,7 @@ class CarController(CarControllerBase):
   def update(self, CC, CS, now_nanos):
     can_sends = []
 
-    lkas_active = CC.latActive and self.lkas_control_bit_prev
+    lkas_active = CC.latActive and self.lkas_control_bit_prev and CS.out.cruiseState.enabled and not CS.out.brakePressed
 
     # cruise buttons
     if (self.frame - self.last_button_frame) * DT_CTRL > 0.05:
@@ -86,6 +87,9 @@ class CarController(CarControllerBase):
             lkas_control_bit_cmd = True
         else:
           apply_torque = 0
+      if not lkas_control_bit_cmd and self.lkas_control_bit_cmd_prev:
+        self.last_lkas_falling_edge = self.frame
+      self.lkas_control_bit_cmd_prev = lkas_control_bit_cmd
       self.apply_torque_last = apply_torque
 
       can_sends.append(chryslercan.create_lkas_command(self.packer, self.CP, int(apply_torque), lkas_control_bit_cmd))
