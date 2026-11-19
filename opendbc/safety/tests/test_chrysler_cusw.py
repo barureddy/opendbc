@@ -203,6 +203,50 @@ class TestChryslerCuswSafety(common.CarSafetyTest, common.MotorTorqueSteeringSaf
     self.assertTrue(self._tx(self._torque_cmd_msg(46, steer_req=1)))
     self.assertTrue(self._tx(self._torque_cmd_msg(42, steer_req=1)))
 
+  def test_ramp_down_too_slow(self):
+    """Torque must drop by at least MAX_RATE_DOWN - 1 per frame (or reach 0 when <= MAX_RATE_DOWN - 1)."""
+    self.safety.set_controls_allowed(True)
+    self._set_prev_torque(50)
+    self.assertTrue(self._tx(self._torque_cmd_msg(50)))
+    self.safety.set_controls_allowed(False)
+
+    # Dropping by only 1 or 2 is rejected
+    self.assertFalse(self._tx(self._torque_cmd_msg(49, steer_req=1)))
+    self.assertFalse(self._tx(self._torque_cmd_msg(48, steer_req=1)))
+    # Dropping by 3 or 4 is accepted
+    self.assertTrue(self._tx(self._torque_cmd_msg(47, steer_req=1)))
+    self.assertTrue(self._tx(self._torque_cmd_msg(43, steer_req=1)))
+
+    # Negative direction mirrors: -50 -> -49 rejected, -47 accepted
+    self.safety.set_controls_allowed(True)
+    self._set_prev_torque(-50)
+    self.assertTrue(self._tx(self._torque_cmd_msg(-50)))
+    self.safety.set_controls_allowed(False)
+    self.assertFalse(self._tx(self._torque_cmd_msg(-49, steer_req=1)))
+    self.assertTrue(self._tx(self._torque_cmd_msg(-47, steer_req=1)))
+
+    # When remaining torque <= MAX_RATE_DOWN - 1, next frame must be 0
+    self.safety.set_controls_allowed(True)
+    self._set_prev_torque(2)
+    self.assertTrue(self._tx(self._torque_cmd_msg(2)))
+    self.safety.set_controls_allowed(False)
+    self.assertFalse(self._tx(self._torque_cmd_msg(1, steer_req=1)))
+    self.assertTrue(self._tx(self._torque_cmd_msg(0, steer_req=0)))
+
+  def test_ramp_down_max_duration_cap(self):
+    """After CHRYSLER_CUSW_MAX_RAMP_FRAMES (75) disallowed frames, ramp state clears to 0."""
+    self.safety.set_controls_allowed(True)
+    self._set_prev_torque(50)
+    self.assertTrue(self._tx(self._torque_cmd_msg(50)))
+    self.safety.set_controls_allowed(False)
+
+    for _ in range(75):
+      self.assertFalse(self._tx(self._torque_cmd_msg(50, steer_req=1)))
+
+    # 76th frame exceeds cap: ramp state resets, rejecting non-zero ramp frames and allowing 0
+    self.assertFalse(self._tx(self._torque_cmd_msg(46, steer_req=1)))
+    self.assertTrue(self._tx(self._torque_cmd_msg(0, steer_req=0)))
+
 
 if __name__ == "__main__":
   unittest.main()

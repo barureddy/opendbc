@@ -219,6 +219,7 @@ bool get_honda_fwd_brake(void){
 
 void set_chrysler_cusw_torque_last(int t){
   chrysler_cusw_torque_last = t;
+  chrysler_cusw_ramp_frames = 0;
 }
 
 int get_chrysler_cusw_torque_last(void){

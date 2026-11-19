@@ -1,13 +1,16 @@
 #include "opendbc/safety/modes/chrysler_common.h"
 
 // Tracks the last accepted torque for ramp-down on disengage.
-// When controls are disallowed, CUSW must ramp torque to zero at max_rate_down
+// When controls are disallowed, CUSW must ramp torque to zero at 3..4 units/frame
 // before clearing the LKAS active bit, to avoid EPS faults.
+static const int CHRYSLER_CUSW_MAX_RAMP_FRAMES = 75;
 static int chrysler_cusw_torque_last = 0;
+static int chrysler_cusw_ramp_frames = 0;
 
 static safety_config chrysler_cusw_init(uint16_t param) {
   SAFETY_UNUSED(param);
   chrysler_cusw_torque_last = 0;
+  chrysler_cusw_ramp_frames = 0;
 
   static const CanMsg CHRYSLER_CUSW_TX_MSGS[] = {
     {0x1F6U, 0, 4, .check_relay = true},
@@ -76,6 +79,7 @@ static bool chrysler_cusw_tx_hook(const CANPacket_t *msg) {
     const bool steer_req = GET_BIT(msg, 12U);
 
     if (controls_allowed) {
+      chrysler_cusw_ramp_frames = 0;
       // Normal operation: use standard torque checks
       if (steer_torque_cmd_checks(desired_torque, steer_req, CHRYSLER_CUSW_STEERING_LIMITS)) {
         tx = false;
@@ -84,34 +88,51 @@ static bool chrysler_cusw_tx_hook(const CANPacket_t *msg) {
         chrysler_cusw_torque_last = desired_torque;
       }
     } else if (chrysler_cusw_torque_last != 0) {
-      // Ramp-down: torque must move toward zero at max_rate_down per frame
-      bool violation = false;
-      const int max_delta = CHRYSLER_CUSW_STEERING_LIMITS.max_rate_down;
-
-      if (chrysler_cusw_torque_last > 0) {
-        violation |= (desired_torque >= chrysler_cusw_torque_last);  // must decrease
-        violation |= (desired_torque < (chrysler_cusw_torque_last - max_delta));
-        violation |= (desired_torque < 0);
+      chrysler_cusw_ramp_frames++;
+      if (chrysler_cusw_ramp_frames > CHRYSLER_CUSW_MAX_RAMP_FRAMES) {
+        // Hard cutoff: never allow prolonged torque after controls are disallowed
+        chrysler_cusw_torque_last = 0;
+        desired_torque_last = 0;
+        rt_torque_last = 0;
+        chrysler_cusw_ramp_frames = 0;
+        tx = (desired_torque == 0);
       } else {
-        violation |= (desired_torque <= chrysler_cusw_torque_last);  // must increase toward zero
-        violation |= (desired_torque > (chrysler_cusw_torque_last + max_delta));
-        violation |= (desired_torque > 0);
-      }
+        // Ramp-down: torque must move toward zero by at least (max_rate_down - 1) and at most max_rate_down per frame
+        bool violation = false;
+        const int max_delta = CHRYSLER_CUSW_STEERING_LIMITS.max_rate_down;
+        const int min_delta = max_delta - 1;
 
-      // LKAS active bit must be set while commanding non-zero torque
-      violation |= (desired_torque != 0) && !steer_req;
+        if (chrysler_cusw_torque_last > 0) {
+          const int max_allowed = (chrysler_cusw_torque_last > min_delta) ? (chrysler_cusw_torque_last - min_delta) : 0;
+          violation |= (desired_torque > max_allowed);
+          violation |= (desired_torque < (chrysler_cusw_torque_last - max_delta));
+          violation |= (desired_torque < 0);
+        } else {
+          const int min_allowed = (chrysler_cusw_torque_last < -min_delta) ? (chrysler_cusw_torque_last + min_delta) : 0;
+          violation |= (desired_torque < min_allowed);
+          violation |= (desired_torque > (chrysler_cusw_torque_last + max_delta));
+          violation |= (desired_torque > 0);
+        }
 
-      // Keep global state synced with ramp-down so re-engage (including mid-ramp) is clean
-      // and a 1-frame pipeline delay on disengage only drops that frame instead of blocking the whole ramp-down
-      if (violation) {
-        tx = false;
-      } else {
-        chrysler_cusw_torque_last = desired_torque;
-        desired_torque_last = desired_torque;
-        rt_torque_last = desired_torque;
+        // LKAS active bit must be set while commanding non-zero torque
+        violation |= (desired_torque != 0) && !steer_req;
+
+        // Keep global state synced with ramp-down so re-engage (including mid-ramp) is clean
+        // and a 1-frame pipeline delay on disengage only drops that frame instead of blocking the whole ramp-down
+        if (violation) {
+          tx = false;
+        } else {
+          chrysler_cusw_torque_last = desired_torque;
+          desired_torque_last = desired_torque;
+          rt_torque_last = desired_torque;
+          if (desired_torque == 0) {
+            chrysler_cusw_ramp_frames = 0;
+          }
+        }
       }
     } else {
       // Ramp-down complete or never started: torque must be zero
+      chrysler_cusw_ramp_frames = 0;
       if (desired_torque != 0) {
         tx = false;
       }

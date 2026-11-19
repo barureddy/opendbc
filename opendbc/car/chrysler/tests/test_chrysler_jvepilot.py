@@ -13,8 +13,9 @@ from opendbc.car.chrysler.carcontroller import (ACC_BUTTON_HOLD_FRAMES, ACC_BUTT
 from opendbc.car.chrysler import chryslercan
 from opendbc.car.chrysler.carstate import CarState
 from opendbc.car.chrysler.interface import CarInterface
-from opendbc.car.chrysler.values import CAR, DBC, ChryslerFlags
+from opendbc.car.chrysler.values import CAR, DBC, CarControllerParams, ChryslerFlags
 from opendbc.safety.tests.libsafety import libsafety_py
+from opendbc.safety.tests.test_chrysler_cusw import TestChryslerCuswSafety
 
 CUSW = CAR.JEEP_CHEROKEE_5TH_GEN
 CRUISE_BUTTONS_CUSW = 0x2FA
@@ -537,3 +538,6 @@ class TestJvePilotCarStateCusw:
       parser.update([(30_000_000, [(0x5D6, bytes.fromhex(hex_dat), 0)])])
       for sig in ("AUTO_PARK_TOGGLE", "FCW_BUTTON", "LANESENSE_BUTTON", "PARKSENSE_BUTTON"):
         assert parser.vl["AUTO_PARK_BUTTON"][sig] == (1 if sig == expected_sig else 0), (hex_dat, sig)
+
+  def test_cusw_steer_max_matches_panda_safety(self):
+    assert CarControllerParams(cusw_cp()).STEER_MAX == TestChryslerCuswSafety.MAX_TORQUE_LOOKUP[1][0]

@@ -147,6 +147,7 @@ class CarController(CarControllerBase):
     at_ceiling = self.jve_speed_ceiling is not None and v_acc >= self.jve_speed_ceiling - 0.1
     at_floor = v_acc <= MIN_ACC_SET_SPEED + 0.1 or (self.jve_speed_floor is not None and v_acc <= self.jve_speed_floor + 0.1)
     threshold = (self.jve_set_speed_step or DEFAULT_SET_SPEED_STEP) / 2 + SET_SPEED_MARGIN
+    # Require extra margin when reversing direction within 1.5 s to avoid +1/-1 hunting across integer HUD rounding
     rev_margin = 0.20 if (self.frame - self.jve_last_speed_frame) < 150 else 0.0
     speed_dir = 0
     if v_target > v_acc + threshold + (rev_margin if self.jve_last_speed_dir < 0 else 0.0) and not at_ceiling:
