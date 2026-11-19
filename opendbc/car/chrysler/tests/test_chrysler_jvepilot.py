@@ -8,7 +8,8 @@ from opendbc.can import CANPacker
 from opendbc.car import Bus, gen_empty_fingerprint, structs
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.chrysler.carcontroller import (ACC_BUTTON_HOLD_FRAMES, ACC_BUTTON_STEP, ACC_FEEDBACK_TIMEOUT,
-                                                ACC_MAX_UNCONFIRMED, CarController)
+                                                ACC_FLOOR_UNCONFIRMED, ACC_INHIBIT_BACKOFF, ACC_MAX_BACKOFF_RETRIES,
+                                                ACC_MAX_UNCONFIRMED, ACC_RESUME_HOLD_FRAMES, CarController)
 from opendbc.car.chrysler import chryslercan
 from opendbc.car.chrysler.carstate import CarState
 from opendbc.car.chrysler.interface import CarInterface
@@ -209,11 +210,12 @@ class TestJvePilotCarController:
     CC, CS = make_cc(target_kph=50.0, set_speed_kph=72.0), make_cs(set_speed_kph=69.0)  # 43 mph
     first = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
     assert len(first) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in first)
-    # Time out the first press at 69 km/h (43 mph): must NOT latch jve_speed_floor on a single missed press, and must retry
-    nxt = self._step(CC, CS, ACC_FEEDBACK_TIMEOUT + 1)
-    assert self.cc.jve_speed_floor is None
-    assert len(nxt) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in nxt)
-    # Second unconfirmed decel press at 69 km/h (43 mph) learns the hardware floor without inhibiting speed control
+    # Time out the first and second presses at 69 km/h (43 mph): must NOT latch jve_speed_floor before ACC_FLOOR_UNCONFIRMED, and must retry
+    for _ in range(ACC_FLOOR_UNCONFIRMED - 1):
+      nxt = self._step(CC, CS, ACC_FEEDBACK_TIMEOUT + 1)
+      assert self.cc.jve_speed_floor is None
+      assert len(nxt) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in nxt)
+    # Third unconfirmed decel press at 69 km/h (43 mph) learns the hardware floor without inhibiting speed control
     self._step(CC, CS, ACC_FEEDBACK_TIMEOUT + 1)
     assert self.cc.jve_speed_floor == pytest.approx(69.0 * CV.KPH_TO_MS)
     assert not self.cc.jve_inhibited["speed"]
@@ -223,7 +225,7 @@ class TestJvePilotCarController:
     assert self.cc.jve_speed_floor is None
     assert len(down) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x08 for _, f in down)
     # Re-learn floor, confirm ego drop also clears it, and verify upward control works
-    self._step(CC, CS, (ACC_FEEDBACK_TIMEOUT + 1) * 2)
+    self._step(CC, CS, (ACC_FEEDBACK_TIMEOUT + 1) * ACC_FLOOR_UNCONFIRMED)
     assert self.cc.jve_speed_floor == pytest.approx(69.0 * CV.KPH_TO_MS)
     CS.out.vEgo = 29.0
     down2 = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
@@ -234,6 +236,84 @@ class TestJvePilotCarController:
     CC.actuators.speed = 72.0 * CV.KPH_TO_MS
     up = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
     assert len(up) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x04 for _, f in up)
+
+  def test_floor_not_learned_above_previously_observed_set_speed(self):
+    # Observe 32 km/h (20 mph) so we know the vehicle reaches the standard FCA minimum;
+    # later missed decels at 50 km/h (31 mph, e.g. 14:41:20) must not latch a false floor.
+    CC, CS = make_cc(target_kph=32.0, set_speed_kph=72.0), make_cs(set_speed_kph=32.0)
+    self._step(CC, CS, 1)
+    CS.out.cruiseState.speed = 50.0 * CV.KPH_TO_MS
+    self._step(CC, CS, (ACC_FEEDBACK_TIMEOUT + 1) * (ACC_FLOOR_UNCONFIRMED + 1))
+    assert self.cc.jve_speed_floor is None
+    assert self.cc.jve_inhibited["speed"]
+
+  def test_confirmed_speed_inhibit_recovers_after_backoff(self):
+    # Confirm one ACCEL press so this engagement proves speed buttons work on the vehicle
+    CC, CS = make_cc(target_kph=105.0, set_speed_kph=105.0), make_cs(set_speed_kph=95.0)
+    sent = self._step(CC, CS, ACC_BUTTON_STEP + ACC_BUTTON_HOLD_FRAMES)
+    assert len(sent) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x04 for _, f in sent)
+    CS.out.cruiseState.speed = 97.0 * CV.KPH_TO_MS
+    self._step(CC, CS, 1)
+    assert self.cc.jve_speed_confirmed_ever
+
+    # Now let ACC_MAX_UNCONFIRMED ACCEL presses time out below LEARN_CEILING_ABOVE -> timeout inhibit
+    self._step(CC, CS, (ACC_FEEDBACK_TIMEOUT + 1) * ACC_MAX_UNCONFIRMED + ACC_BUTTON_STEP)
+    assert self.cc.jve_inhibited["speed"]
+    assert self.cc.jve_backoff_retries["speed"] == 0
+
+    # Remains inhibited until ACC_INHIBIT_BACKOFF frames elapse, then retries one hold burst
+    remaining = ACC_INHIBIT_BACKOFF - (self.cc.frame - self.cc.jve_inhibited_frame["speed"])
+    assert remaining > 0
+    assert self._step(CC, CS, remaining) == []
+    assert self.cc.jve_inhibited["speed"]
+    recovered = self._step(CC, CS, ACC_BUTTON_HOLD_FRAMES)
+    assert not self.cc.jve_inhibited["speed"]
+    assert self.cc.jve_backoff_retries["speed"] == 1
+    assert len(recovered) == ACC_BUTTON_HOLD_FRAMES and all(f[0] & 0x04 for _, f in recovered)
+
+    # Exhaust remaining backoff retries without confirmation -> stays fail-closed
+    for _ in range(ACC_MAX_BACKOFF_RETRIES - 1):
+      self._step(CC, CS, ACC_FEEDBACK_TIMEOUT * ACC_MAX_UNCONFIRMED + ACC_INHIBIT_BACKOFF + ACC_BUTTON_HOLD_FRAMES + 5)
+    self._step(CC, CS, ACC_FEEDBACK_TIMEOUT * ACC_MAX_UNCONFIRMED + ACC_INHIBIT_BACKOFF + 50)
+    assert self.cc.jve_inhibited["speed"]
+    assert self.cc.jve_backoff_retries["speed"] == ACC_MAX_BACKOFF_RETRIES
+    assert self._step(CC, CS, ACC_INHIBIT_BACKOFF * 2) == []
+
+  def test_standstill_resume_multi_frame_burst_and_abort(self):
+    CC, CS = make_cc(target_kph=0.0), make_cs(set_speed_kph=50.0)
+    CS.out.cruiseState.standstill = True
+    # Advance past the initial 50 ms power-on button lockout before requesting resume
+    assert self._step(CC, CS, 6) == []
+    CC.cruiseControl.resume = True
+
+    def step_50hz(n):
+      frames = []
+      for i in range(n):
+        CS.cruise_buttons_rx = (i % 2 == 0)
+        if CS.cruise_buttons_rx:
+          CS.button_counter = (CS.button_counter + 1) % 16
+        _, sends = self.cc.update(CC.as_reader(), CS, 0)
+        for addr, dat, bus in sends:
+          if addr == CRUISE_BUTTONS_CUSW:
+            assert self.safety.safety_tx_hook(libsafety_py.make_CANPacket(addr, bus, dat)), dat.hex()
+            frames.append((i, bytes(dat)))
+      return frames
+
+    # First burst: ACC_RESUME_HOLD_FRAMES consecutive SCCM-synced 0x10 frames, then ACC_BUTTON_STEP release gap
+    first_burst = step_50hz(ACC_RESUME_HOLD_FRAMES * 2)
+    assert len(first_burst) == ACC_RESUME_HOLD_FRAMES
+    assert all(f[0] == 0x10 and idx % 2 == 0 for idx, f in first_burst)
+    # Cooldown starts after the last sent frame at idx=(ACC_RESUME_HOLD_FRAMES - 1) * 2
+    cooldown_left = ACC_BUTTON_STEP - 2
+    assert step_50hz(cooldown_left) == []
+    next_burst_start = step_50hz(4)
+    assert len(next_burst_start) >= 1 and all(f[0] == 0x10 for _, f in next_burst_start)
+
+    # Mid-burst abort when brake is pressed: immediately stops sending and clears hold counter
+    assert self.cc.jve_resume_hold_frames > 0
+    CS.out.brakePressed = True
+    assert step_50hz(10) == []
+    assert self.cc.jve_resume_hold_frames == 0
 
   def test_acc_hud_mph_signal_preferred_when_present(self):
     CP = cusw_cp()
@@ -374,6 +454,8 @@ class TestJvePilotCarStateCusw:
       ("GEAR", 10),
       ("RFHM_START_STOP", 5),
       ("AUTO_PARK_BUTTON", 4),
+      ("AUTO_START_STOP_STATUS", 5),
+      ("AUTO_START_STOP_BUTTON", 2),
     ], 0)
     msgs = [
       packer.make_can_msg("EPS_STATUS_2", 0, {"LONG_ACCEL": 0.5, "LATERAL_ACCEL": -0.3, "YAW_RATE": 0.1}),
@@ -387,7 +469,9 @@ class TestJvePilotCarStateCusw:
       (0x20A, bytes.fromhex("00080e0d"), 0),
       (0x4EE, bytes.fromhex("04410f00100012e6"), 0),
       packer.make_can_msg("RFHM_START_STOP", 0, {"START_STOP_BUTTON_EVENT": 0x21, "KEY_FOB_VALID": 1}),
-      packer.make_can_msg("AUTO_PARK_BUTTON", 0, {"PARKSENSE_BUTTON": 1, "LANESENSE_BUTTON": 1, "AUTO_START_STOP_BUTTON": 1}),
+      packer.make_can_msg("AUTO_PARK_BUTTON", 0, {"AUTO_PARK_TOGGLE": 1, "FCW_BUTTON": 1, "LANESENSE_BUTTON": 1, "PARKSENSE_BUTTON": 1}),
+      (0x4D0, bytes.fromhex("0000e70004000000"), 0),
+      (0x7CC, bytes.fromhex("8002"), 0),
     ]
     parser.update([(10_000_000, msgs)])
     assert abs(parser.vl["EPS_STATUS_2"]["LONG_ACCEL"] - 0.5) < 0.02
@@ -409,15 +493,23 @@ class TestJvePilotCarStateCusw:
     assert parser.vl["GEAR"]["CHECKSUM"] == 0xE6
     assert parser.vl["RFHM_START_STOP"]["START_STOP_BUTTON_EVENT"] == 0x21
     assert parser.vl["RFHM_START_STOP"]["KEY_FOB_VALID"] == 1
-    assert parser.vl["AUTO_PARK_BUTTON"]["PARKSENSE_BUTTON"] == 1
+    assert parser.vl["AUTO_PARK_BUTTON"]["AUTO_PARK_TOGGLE"] == 1
+    assert parser.vl["AUTO_PARK_BUTTON"]["FCW_BUTTON"] == 1
     assert parser.vl["AUTO_PARK_BUTTON"]["LANESENSE_BUTTON"] == 1
-    assert parser.vl["AUTO_PARK_BUTTON"]["AUTO_START_STOP_BUTTON"] == 1
+    assert parser.vl["AUTO_PARK_BUTTON"]["PARKSENSE_BUTTON"] == 1
+    assert parser.vl["AUTO_START_STOP_STATUS"]["AUTO_START_STOP_STATE"] == 4
+    assert parser.vl["AUTO_START_STOP_STATUS"]["AUTO_START_STOP_INACTIVE"] == 0
+    assert parser.vl["AUTO_START_STOP_STATUS"]["AUTO_START_STOP_DISABLED"] == 0
+    assert parser.vl["AUTO_START_STOP_BUTTON"]["AUTO_START_STOP_PRESSED"] == 0
+    assert parser.vl["AUTO_START_STOP_BUTTON"]["AUTO_START_STOP_PRESSED_ALT"] == 0
 
-    # Verify real captured PAM-absent fault frame (0x1EC) and Drive frames (0x20A / 0x4EE)
+    # Verify real captured PAM-absent fault frame (0x1EC), Drive frames (0x20A / 0x4EE), and ESS toggle frames (0x7CC / 0x4D0)
     parser.update([(20_000_000, [
       (0x1EC, bytes.fromhex("840100a7d08014c7"), 0),
       (0x20A, bytes.fromhex("002006ca"), 0),
       (0x4EE, bytes.fromhex("0544000000001f1d"), 0),
+      (0x4D0, bytes.fromhex("0000e80003480000"), 0),
+      (0x7CC, bytes.fromhex("8026"), 0),
     ])])
     assert parser.vl["EPS_STATUS"]["AUTO_PARK_FAULT_1"] == 1
     assert parser.vl["EPS_STATUS"]["EPS_READY"] == 0
@@ -429,3 +521,19 @@ class TestJvePilotCarStateCusw:
     assert parser.vl["GEAR"]["COUNTER"] == 15
     assert parser.vl["GEAR"]["CHECKSUM"] == 0x1D
     assert parser.vl["WHEEL_PULSES"]["WHEEL_PULSE_RR"] == 45
+    assert parser.vl["AUTO_START_STOP_STATUS"]["AUTO_START_STOP_STATE"] == 3
+    assert parser.vl["AUTO_START_STOP_STATUS"]["AUTO_START_STOP_INACTIVE"] == 1
+    assert parser.vl["AUTO_START_STOP_STATUS"]["AUTO_START_STOP_DISABLED"] == 1
+    assert parser.vl["AUTO_START_STOP_BUTTON"]["AUTO_START_STOP_PRESSED"] == 1
+    assert parser.vl["AUTO_START_STOP_BUTTON"]["AUTO_START_STOP_PRESSED_ALT"] == 1
+
+    # Verify individual raw Nov 19 0x5D6 dashboard switch captures (FCW, LaneSense, ParkSense off/on, Self-Park)
+    for hex_dat, expected_sig in [
+      ("20000000", "FCW_BUTTON"),
+      ("40000000", "LANESENSE_BUTTON"),
+      ("80000000", "PARKSENSE_BUTTON"),
+      ("10000000", "AUTO_PARK_TOGGLE"),
+    ]:
+      parser.update([(30_000_000, [(0x5D6, bytes.fromhex(hex_dat), 0)])])
+      for sig in ("AUTO_PARK_TOGGLE", "FCW_BUTTON", "LANESENSE_BUTTON", "PARKSENSE_BUTTON"):
+        assert parser.vl["AUTO_PARK_BUTTON"][sig] == (1 if sig == expected_sig else 0), (hex_dat, sig)

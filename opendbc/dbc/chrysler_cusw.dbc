@@ -306,6 +306,11 @@ BO_ 1002 ECM_3: 8 XXX
  SG_ ENGINE_LOAD_PCT : 39|8@0+ (0.4,0) [0|100] "%" XXX
  SG_ ENGINE_RPM_COARSE : 55|8@0+ (32,0) [0|8160] "rpm" XXX
 
+BO_ 1232 AUTO_START_STOP_STATUS: 8 XXX
+ SG_ AUTO_START_STOP_STATE : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ AUTO_START_STOP_INACTIVE : 46|1@0+ (1,0) [0|1] "" XXX
+ SG_ AUTO_START_STOP_DISABLED : 43|1@0+ (1,0) [0|1] "" XXX
+
 BO_ 1242 ENGINE_LOAD_1: 8 XXX
  SG_ ENGINE_LOAD : 7|8@0+ (0.4,0) [0|100] "%" XXX
  SG_ THROTTLE_ACTUATOR : 31|8@0+ (0.4,0) [0|100] "%" XXX
@@ -355,9 +360,9 @@ BO_ 1492 DAS_LEAD: 4 XXX
 
 BO_ 1494 AUTO_PARK_BUTTON: 4 XXX
  SG_ AUTO_PARK_TOGGLE : 4|1@0+ (1,0) [0|1] "" XXX
- SG_ PARKSENSE_BUTTON : 5|1@0+ (1,0) [0|1] "" XXX
+ SG_ FCW_BUTTON : 5|1@0+ (1,0) [0|1] "" XXX
  SG_ LANESENSE_BUTTON : 6|1@0+ (1,0) [0|1] "" XXX
- SG_ AUTO_START_STOP_BUTTON : 7|1@0+ (1,0) [0|1] "" XXX
+ SG_ PARKSENSE_BUTTON : 7|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 1496 LIGHTS_1: 6 XXX
  SG_ TURN_SIGNAL_ON : 7|1@0+ (1,0) [0|1] "" XXX
@@ -392,6 +397,10 @@ BO_ 1756 RADAR_STATUS_2: 4 XXX
 
 BO_ 1992 IPC_CLOCK: 8 XXX
  SG_ SECONDS_COUNTER : 55|16@0+ (0.1,0) [0|6553.5] "s" XXX
+
+BO_ 1996 AUTO_START_STOP_BUTTON: 2 XXX
+ SG_ AUTO_START_STOP_PRESSED : 13|1@0+ (1,0) [0|1] "" XXX
+ SG_ AUTO_START_STOP_PRESSED_ALT : 10|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 1999 ODOMETER: 5 XXX
  SG_ ODOMETER_KM : 7|24@0+ (1,0) [0|16777215] "km" XXX
@@ -430,17 +439,22 @@ CM_ SG_ 524 AUTO_PARK_CMD "Signed steering torque command from PAM during active
 CM_ SG_ 524 AUTO_PARK_CONTROL_BIT "1 when PAM is actively steering the wheel (100 Hz mode)";
 CM_ SG_ 524 AUTO_PARK_ACTIVE "1 during active self-parking torque control";
 CM_ SG_ 524 AUTO_PARK_STANDBY "1 from ParkSense button press while searching / parking / awaiting shift";
+CM_ SG_ 1232 AUTO_START_STOP_STATE "Auto Start/Stop (ESS) state: 0x04 ready/enabled, 0x03 disabled via center-stack button, 0x07 unavailable/not ready";
+CM_ SG_ 1232 AUTO_START_STOP_INACTIVE "1 when Auto Start/Stop (ESS) is off or unavailable (byte 5 bit 6)";
+CM_ SG_ 1232 AUTO_START_STOP_DISABLED "1 when Auto Start/Stop (ESS) is explicitly disabled via center-stack button (byte 5 bit 3)";
 CM_ SG_ 1244 BRAKE_PEDAL_STATE "0 = released, 1 = brake pedal pressed";
 CM_ SG_ 1494 AUTO_PARK_TOGGLE "Pulses 1 when ParkSense self-parking button is pressed";
-CM_ SG_ 1494 PARKSENSE_BUTTON "Pulses 1 when ParkSense off/on center-stack button is pressed";
+CM_ SG_ 1494 FCW_BUTTON "Pulses 1 when Forward Collision Warning (FCW) center-stack button is pressed";
 CM_ SG_ 1494 LANESENSE_BUTTON "Pulses 1 when LaneSense center-stack button is pressed";
-CM_ SG_ 1494 AUTO_START_STOP_BUTTON "Pulses 1 when Auto Start/Stop off center-stack button is pressed";
+CM_ SG_ 1494 PARKSENSE_BUTTON "Pulses 1 when ParkSense off/on center-stack button is pressed";
 CM_ SG_ 1496 LEFT_TURN_FLASHER "1 Hz exterior left turn signal bulb flasher state";
 CM_ SG_ 1496 RIGHT_TURN_FLASHER "1 Hz exterior right turn signal bulb flasher state";
 CM_ SG_ 1510 ACC_ENGAGED "Transmitted by PAM module alongside 0x20C (stops if PAM is offline)";
 CM_ SG_ 1510 AUTO_PARK_PROMPT "ParkSense UI guidance/prompt code (0x02 searching/forward, 0x3c/0x44 reverse/spot, 0x48 pull forward, 0x1e stop/shift)";
-CM_ SG_ 1510 DRIVE_HOLD_STATE "0x06 moving/released, 0x02 low-speed braking/stop hold";
-CM_ SG_ 1752 ACC_FCW_FAULT "1 during ACC/FCW fault (ACC_ICON == 0x3A)";
+CM_ SG_ 1510 DRIVE_HOLD_STATE "0x06 moving/released (also bit 2 = 1 when ParkSense is turned off via 0x5D6 PARKSENSE_BUTTON), 0x02 low-speed braking/stop hold";
+CM_ SG_ 1752 ACC_FCW_FAULT "1 when FCW is disabled via center-stack button (0x5D6 FCW_BUTTON) or during ACC/FCW fault (ACC_ICON == 0x3A)";
+CM_ SG_ 1996 AUTO_START_STOP_PRESSED "Pulses 1 when Auto Start/Stop (ESS) center-stack button is pressed (0x7CC 8002 -> 8026 -> 8002)";
+CM_ SG_ 1996 AUTO_START_STOP_PRESSED_ALT "Secondary bit that pulses 1 alongside AUTO_START_STOP_PRESSED on 0x7CC";
 VAL_ 522 SHIFTER_POSITION 0 "TRANSITION" 1 "P" 2 "R" 3 "N" 4 "D";
 VAL_ 758 IGNITION_STATE 1 "OFF" 46 "ACC" 50 "RUN" 54 "START";
 VAL_ 1262 PRNDL 1 "P" 2 "R" 3 "N" 4 "D" 5 "S";
