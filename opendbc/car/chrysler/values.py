@@ -115,7 +115,7 @@ class CarControllerParams:
       self.STEER_STEP = 1  # 100 Hz
       self.STEER_DELTA_UP = 4
       self.STEER_DELTA_DOWN = 4
-      self.STEER_MAX = 250  # TODO: Some CUSW will go to 261, some not quite, exact boundaries not yet determined
+      self.STEER_MAX = 260  # TODO: Testing higher CUSW max torque; some trims may go up to ~261
     else:
       self.STEER_DELTA_UP = 3
       self.STEER_DELTA_DOWN = 3

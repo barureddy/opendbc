@@ -57,7 +57,7 @@ static void chrysler_cusw_rx_hook(const CANPacket_t *msg) {
 
 static bool chrysler_cusw_tx_hook(const CANPacket_t *msg) {
   static const TorqueSteeringLimits CHRYSLER_CUSW_STEERING_LIMITS = {
-    .max_torque = 250,  // TODO: Find the actual cap, think we're faulting before 261
+    .max_torque = 260,  // TODO: Testing higher CUSW max torque (was 250)
     .max_rt_delta = 150,
     .max_rate_up = 4,
     .max_rate_down = 4,
